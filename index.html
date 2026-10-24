@@ -34,6 +34,8 @@
   th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left}
   th{font-size:12px;color:var(--mut);background:#f8fafc}
   tr.err td{background:#fdeaea}
+  tr.warn td{background:#fff6dd}
+  .wbox{border:1px solid #f0d58a;background:#fffaf0;border-radius:8px;padding:10px 12px;margin:8px 0}
   .x{background:none;border:0;color:var(--bad);cursor:pointer;font-size:16px}
   .wrap{overflow-x:auto}
   .msg{margin:10px 0;padding:9px 12px;border-radius:7px;display:none}
@@ -72,6 +74,7 @@
   <button id="tabM" class="on">Masters</button>
   <button id="tabP">Purchase</button>
   <button id="tabS">Sale</button>
+  <button id="tabO">Orders &amp; Returns</button>
   <button id="tabT">Stock</button>
 </nav>
 <main>
@@ -79,6 +82,7 @@
     <div id="pageM"></div>
     <div id="pageP" class="hide"></div>
     <div id="pageS" class="hide"></div>
+    <div id="pageO" class="hide"></div>
     <div id="pageT" class="hide"></div>
   </div>
 </main>
@@ -165,7 +169,12 @@ function combo(input, getItems, opts={}){
     if(e.key==="ArrowDown"){ e.preventDefault(); if(items.length){ act=Math.min(act+1,items.length-1); render(); } }
     else if(e.key==="ArrowUp"){ e.preventDefault(); act=Math.max(act-1,0); render(); }
     else if(e.key==="Escape"){ items=[]; render(); }
-    else if(e.key==="Enter"){ e.preventDefault(); if(items.length) pick(items[act],true); else if(picked && opts.next) opts.next(); }
+    else if(e.key==="Enter"){
+      e.preventDefault();
+      if(opts.optional && !clean(input.value)){ items=[]; render(); if(opts.next) opts.next(); }     // optional field left empty: just move on
+      else if(items.length) pick(items[act],true);
+      else if(picked && opts.next) opts.next();
+    }
     else if(e.key==="Tab"){ if(items.length && !picked) pick(items[act],false); }
   });
   input.addEventListener("blur", () => setTimeout(()=>{
@@ -182,7 +191,10 @@ function combo(input, getItems, opts={}){
    brands   : [{type, name}]                      brand belongs to a type (TPU -> Zigzag)
    groups   : [{id, name, products:[productKey]}] equal-model group (a product is in one group only)
    Stock is counted per  GROUP + TYPE + BRAND  (Edge60 50 + Edge60Fusion 40 = 90 pcs). No product codes. */
-const M  = () => Object.assign({products:[],types:[],brands:[],groups:[],skus:[]}, ls("erp_m3",{}));
+const M  = () => Object.assign({products:[],types:[],brands:[],groups:[],skus:[],vendors:[]}, ls("erp_m3",{}));
+/* vendors: [{name, seller:bool, buyer:bool}]  seller = we buy from them (Purchase), buyer = we sell to them (Sale / Orders / Returns) */
+const vendorItems = (role) => M().vendors.filter(v=>v[role]).map(v=>({value:v.name,label:v.name}));
+const vendorUsed = name => ledger().some(e=>low(e.party)===low(name));
 const saveM = m => { lsSet("erp_m3", m); window.dispatchEvent(new Event("mastersChanged")); };
 const pKey  = p => low(p.company)+"|"+low(p.model);
 const pName = p => p.company+p.model;
@@ -198,14 +210,9 @@ function allCodes(m){
   return out;
 }
 
-/* ---------- SKU helpers ---------- */
+/* ---------- SKU helpers (a SKU only knows its Product Code = Type + Product; the brand is picked from stock) ---------- */
 const normSku = v => low(String(v ?? "").replace(/\s+/g," "));
 const findSku = (m,sku) => m.skus.find(s=>normSku(s.sku)===normSku(sku));
-function skuBrand(m,s){                          // brand of a SKU: its own, or the only brand of its type
-  const bs = m.brands.filter(b=>b.type===s.type);
-  const own = bs.find(b=>b.name===s.brand); if(own) return own.name;
-  return bs.length===1 ? bs[0].name : "";
-}
 
 /* ---------- LEDGER: every saved purchase/sale line. Group is worked out from the CURRENT Masters. ---------- */
 const stockKey = (gid,type,brand) => [gid,low(type),low(brand)].join("|");
@@ -227,11 +234,24 @@ function stockMap(entries){                       // stock is added up per GROUP
   const mp = {};
   entries.forEach(e=>{
     const k = stockKey(e.gid,e.type,e.brand);
-    const s = mp[k] || (mp[k] = {key:k,gid:e.gid,type:e.type,brand:e.brand,group:e.group,in:0,out:0,products:{}});
+    const s = mp[k] || (mp[k] = {key:k,gid:e.gid,type:e.type,brand:e.brand,group:e.group,groupName:e.groupName,in:0,out:0,first:"",products:{}});
     const pr = s.products[e.product] || (s.products[e.product] = {in:0,out:0});
-    if(IN_KINDS.includes(e.kind)){ s.in+=e.qty; pr.in+=e.qty; } else { s.out+=e.qty; pr.out+=e.qty; }
+    if(IN_KINDS.includes(e.kind)){ s.in+=e.qty; pr.in+=e.qty; if(!s.first || e.datetime<s.first) s.first = e.datetime; } else { s.out+=e.qty; pr.out+=e.qty; }
   });
   return mp;
+}
+/* Take qty pieces of (group, type) out of stock. If a brand is asked for, only that brand is used.
+   Otherwise whichever brands have stock are used, the brand that came in first goes first. pend = pieces already planned. */
+function allocate(sm, gid, type, qty, brandPref, pend){
+  const cands = Object.values(sm).filter(s=>s.gid===gid && low(s.type)===low(type) && (!brandPref || low(s.brand)===low(brandPref)))
+    .map(s=>({key:s.key, brand:s.brand, avail:s.in-s.out-((pend||{})[s.key]||0), first:s.first}))
+    .filter(c=>c.avail>0).sort((a,b)=>a.first.localeCompare(b.first) || a.brand.localeCompare(b.brand));
+  const total = cands.reduce((a,c)=>a+c.avail,0);
+  if(total<=0) return {error:"Not in stock (purchase it first)"};
+  if(qty>total) return {error:"Only "+total+" in stock"};
+  let left = qty; const parts = [];
+  for(const c of cands){ if(left<=0) break; const t = Math.min(left,c.avail); parts.push({key:c.key, brand:c.brand, qty:t}); left -= t; }
+  return {parts};
 }
 const availableQty = (gid,type,brand) => { const s = stockMap(ledger())[stockKey(gid,type,brand)]; return s ? s.in - s.out : 0; };
 const usedProducts = () => [...new Set(ledger().map(e=>e.pk))];
@@ -241,7 +261,7 @@ const groupUsed = gid => ledger().some(e=>e.gid===gid);
 /* ---------- backend call ---------- */
 async function api(action, payload){
   if(!CONFIG.API_URL){                         // DEMO mode
-    const store = action==="savePurchase" ? "erp_purchase" : "erp_sale";
+    const store = {savePurchase:"erp_purchase", saveSale:"erp_sale", saveOrders:"erp_orders", saveReturns:"erp_returns"}[action];
     const all = ls(store, []);
     if(all.some(x=>x.invoice===payload.invoice)) return {ok:false, error:"Invoice no. already exists"};
     all.push(payload); lsSet(store, all); return {ok:true, demo:true};
@@ -258,7 +278,7 @@ function buildMasters(root){
   let cur = "product", gSel = new Set(), gNameEdited = false;
   root.innerHTML = `<div class="modes"></div><div class="body"></div>`;
   const modes = $(".modes",root), body = $(".body",root);
-  const tabs = [["product","Product"],["type","Type"],["brand","Brand"],["group","Group"],["sku","SKU"]];
+  const tabs = [["product","Product"],["type","Type"],["brand","Brand"],["group","Group"],["sku","SKU"],["vendor","Vendor"]];
 
   const tbl = (heads, rows) => {
     const t = el("table"), h = el("tr");
@@ -274,7 +294,7 @@ function buildMasters(root){
     modes.innerHTML = "";
     tabs.forEach(([k,l])=>{ const b=el("button",{textContent:l,className:k===cur?"on":""}); b.onclick=()=>{cur=k;draw();}; modes.append(b); });
     body.innerHTML = "";
-    ({product:drawProduct,type:drawType,brand:drawBrand,group:drawGroup,sku:drawSku})[cur]();
+    ({product:drawProduct,type:drawType,brand:drawBrand,group:drawGroup,sku:drawSku,vendor:drawVendor})[cur]();
   }
 
   /* ----- Product: Company + Model, no spaces ----- */
@@ -427,6 +447,48 @@ function buildMasters(root){
     });
   }
 
+  /* ----- Vendor master: sellers (we buy from) and buyers (we sell to) ----- */
+  function drawVendor(){
+    const m = M(), err = el("div",{className:"err-t"});
+    body.append(el("p",{className:"hint",style:"margin-top:0",textContent:"Vendors are the parties you deal with. Tick Seller if you buy stock from them (Purchase page), Buyer if you sell to them (Sale, Orders and Returns). One vendor can be both."}));
+    const nm = el("input",{placeholder:"Vendor name"});
+    const cs = el("input",{type:"checkbox",checked:true}), cbuy = el("input",{type:"checkbox"});
+    const roles = el("div",{style:"display:flex;gap:16px;align-items:center;height:35px"},
+      el("label",{className:"chk"},cs,el("span",{textContent:"Seller (I buy from)"})), el("label",{className:"chk"},cbuy,el("span",{textContent:"Buyer (I sell to)"})));
+    const add = el("button",{className:"btn",textContent:"Add vendor"});
+    add.onclick = () => {
+      const v = clean(nm.value).replace(/\s+/g," ");
+      if(!v){ err.textContent="Vendor name is required"; nm.focus(); return; }
+      if(!cs.checked && !cbuy.checked){ err.textContent="Tick Seller, Buyer or both"; return; }
+      if(m.vendors.some(x=>low(x.name)===low(v))){ err.textContent="This vendor already exists"; return; }
+      m.vendors.push({name:v, seller:cs.checked, buyer:cbuy.checked}); m.vendors.sort((a,b)=>a.name.localeCompare(b.name)); saveM(m); draw();
+      const n = $(".v-nm", body); if(n) n.focus();
+    };
+    nm.classList.add("v-nm");
+    nm.onkeydown = e => { if(e.key==="Enter") add.click(); };
+    body.append(el("div",{className:"grid"}, field("Vendor",nm), field("Role",roles)), add, err);
+    const flt = el("input",{placeholder:"Search vendor...",style:"margin-top:10px"}), box = el("div");
+    const render = () => {
+      box.innerHTML = "";
+      const f = norm(flt.value), list = m.vendors.filter(v=>score(norm(v.name),f)!==null);
+      box.append(tbl(["Vendor","Seller","Buyer",""], list.map(v=>{
+        const mk = role => { const c = el("input",{type:"checkbox",checked:!!v[role],style:"width:auto"});
+          c.onchange = () => {
+            const other = role==="seller" ? "buyer" : "seller";
+            if(!c.checked && !v[other]){ c.checked = true; err.textContent = "A vendor needs at least one role. Delete the vendor instead."; return; }
+            if(!c.checked && vendorUsed(v.name)){ c.checked = true; err.textContent = "'"+v.name+"' already has entries, so a role cannot be removed."; return; }
+            v[role] = c.checked; err.textContent = ""; saveM(m);
+          }; return c; };
+        return [v.name, mk("seller"), mk("buyer"), delBtn(()=>{
+          if(vendorUsed(v.name)) return note("'"+v.name+"' is already used in purchase/sale/orders, so it cannot be deleted.");
+          m.vendors = m.vendors.filter(x=>x!==v); saveM(m); draw();
+        })];
+      })));
+    };
+    flt.oninput = render; render();
+    body.append(el("h4",{style:"margin:16px 0 0",textContent:"Vendors ("+m.vendors.length+")"}), flt, box);
+  }
+
   /* ----- SKU master: any SKU text -> Product Code ----- */
   let skuMode = "single", skuBulk = [];
   function drawSku(){
@@ -530,7 +592,8 @@ function buildMasters(root){
    ===================================================== */
 function buildPage(kind, root){
   const isP = kind==="purchase";
-  const partyLabel = isP ? "Vendor" : "Customer";
+  const partyLabel = isP ? "Vendor (Seller)" : "Vendor (Buyer)";
+  const role = isP ? "seller" : "buyer";
   const cls = isP ? "" : "sale";
   let rows = [], mode = "single", bulkRows = [];
   const act = isP ? "savePurchase" : "saveSale";
@@ -540,7 +603,7 @@ function buildPage(kind, root){
     <div class="grid">
       <div><label>Invoice No.</label><input class="inv"></div>
       <div><label>Date & Time</label><input class="dt" type="datetime-local"></div>
-      <div><label>${partyLabel}</label><input class="party" placeholder="${partyLabel} name"></div>
+      <div><label>${partyLabel}</label><input class="party" placeholder="type vendor name" autocomplete="off"></div>
     </div>
     <div class="hint" style="margin:-4px 0 12px">Invoice no. is auto-generated (yyyymmddhhmm). You can edit it.</div>
 
@@ -548,12 +611,12 @@ function buildPage(kind, root){
       <div class="grid">
         <div><label>Product</label><input class="f-product" placeholder="type e.g. ge60" autocomplete="off"></div>
         <div><label>Type</label><input class="f-type" placeholder="type e.g. tpu" autocomplete="off"></div>
-        <div><label>Brand</label><input class="f-brand" placeholder="pick type first" autocomplete="off" disabled></div>
+        <div><label>Brand${isP?"":" (optional)"}</label><input class="f-brand" placeholder="pick type first" autocomplete="off" disabled></div>
         <div><label>Qty</label><input class="f-qty" type="number" min="1" step="1" placeholder="Enter to add"></div>
         <div><label>Group (auto)</label><input class="f-group" readonly placeholder="auto from product"></div>
         <div><label>Product Code (auto)</label><input class="f-code" readonly placeholder="Type_Product"></div>
       </div>
-      <div class="hint" style="margin:-4px 0 10px">Fast entry: type a few letters, press Enter to pick and jump to the next field. In Qty, press Enter to add the row. Letters can be from the middle ("ge60" shows Edge60 and Edge60Fusion).</div>
+      <div class="hint" style="margin:-4px 0 10px">Fast entry: type a few letters, press Enter to pick and jump to the next field. In Qty, press Enter to add the row. Letters can be from the middle ("ge60" shows Edge60 and Edge60Fusion).${isP?"":" Brand can be left empty: stock is then taken from whichever brand is available (the one that came in first goes first)."}</div>
       <button class="btn ${cls} add">Add to row</button>
     </section>
 
@@ -562,7 +625,7 @@ function buildPage(kind, root){
         <button class="btn ghost tpl">Download Excel template</button>
         <div><label>Upload filled template</label><input class="file" type="file" accept=".xlsx,.xls,.csv"></div>
       </div>
-      <div class="hint">Columns: Product, Type, Brand, Qty. Values must match the Masters (see the reference sheets inside the template). Rows with errors are highlighted and must be fixed before saving.</div>
+      <div class="hint">Columns: Product, Type, Brand, Qty.${isP?"":" Brand can be left empty (stock is then taken from whichever brand is available)."} Values must match the Masters (see the reference sheets inside the template). Rows with errors are highlighted and must be fixed before saving.</div>
     </section>
 
     <h4 style="margin:16px 0 0" class="ttl"></h4>
@@ -591,31 +654,36 @@ function buildPage(kind, root){
     next: () => q(".f-type").focus()
   });
   const cType = combo(q(".f-type"), () => M().types.map(t=>({value:t,label:t})), {
-    onPick: it => { cBrand.clear(); cBrand.setDisabled(!it); q(".f-brand").placeholder = it ? "type e.g. zig" : "pick type first"; showInfo(); },
+    onPick: it => { cBrand.clear(); cBrand.setDisabled(!it); q(".f-brand").placeholder = it ? brandHint() : "pick type first"; showInfo(); },
     next: () => { if(!q(".f-brand").disabled) q(".f-brand").focus(); }
   });
   const cBrand = combo(q(".f-brand"), () => { const t=cType.get(); return t ? M().brands.filter(b=>b.type===t.value).map(b=>({value:b.name,label:b.name})) : []; }, {
-    next: () => q(".f-qty").focus()
+    next: () => q(".f-qty").focus(), optional: !isP      // Sale: Enter on an empty brand = any available brand
   });
+  const cParty = combo(party, () => vendorItems(role), {});
+  const brandHint = () => isP ? "type e.g. zig" : "empty = any available";
   q(".f-qty").addEventListener("keydown", e => { if(e.key==="Enter"){ e.preventDefault(); q(".add").click(); } });
   const resetEntry = () => { cProd.clear(); cType.clear(); cBrand.clear(); cBrand.setDisabled(true); q(".f-brand").placeholder="pick type first"; q(".f-qty").value=""; q(".f-group").value=""; q(".f-code").value=""; };
   window.addEventListener("mastersChanged", resetEntry);
 
-  /* validate one entry against Masters -> {row} or {error} */
-  function resolve(p, type, brand, qty, pend){
+  /* validate one entry against Masters -> {rows:[...]} or {error}.
+     Purchase: one row with the chosen brand. Sale: brand optional; with no brand the stock is taken from whichever
+     brands have it, so one entry can turn into several rows (one per brand). */
+  function resolve(p, type, brand, qty, pend, sm){
     const m = M();
     if(!p) return {error:"Product not in Masters"};
     const t = m.types.find(x=>low(x)===low(type)); if(!t) return {error:"Type '"+type+"' not in Masters"};
-    const b = m.brands.find(x=>x.type===t && low(x.name)===low(brand)); if(!b) return {error:"Brand '"+brand+"' not found under type "+t};
+    let bname = "";
+    if(clean(brand)){ const b = m.brands.find(x=>x.type===t && low(x.name)===low(brand)); if(!b) return {error:"Brand '"+brand+"' not found under type "+t}; bname = b.name; }
+    else if(isP) return {error:"Brand missing"};
     const n = Number(qty); if(!(n>0) || !Number.isInteger(n)) return {error:"Qty must be a whole number > 0"};
-    const gi = groupInfo(m,p);
-    if(!isP){                                      // sale can not be more than the stock in hand
-      const have = availableQty(gi.id,t,b.name) - ((pend||{})[stockKey(gi.id,t,b.name)]||0);
-      if(have<=0) return {error:"Not in stock (purchase it first)"};
-      if(n>have) return {error:"Only "+have+" in stock"};
-    }
-    return {row:{pk:pKey(p), company:p.company, model:p.model, product:pName(p), type:t, brand:b.name, group:codeOf(t,gi.name), gid:gi.id, code:codeOf(t,pName(p)), qty:n}};
+    const gi = groupInfo(m,p), base = {pk:pKey(p), company:p.company, model:p.model, product:pName(p), type:t, group:codeOf(t,gi.name), gid:gi.id, code:codeOf(t,pName(p))};
+    if(isP) return {rows:[{...base, brand:bname, qty:n}]};
+    const a = allocate(sm || stockMap(ledger()), gi.id, t, n, bname, pend);
+    if(a.error) return {error:a.error};
+    return {rows:a.parts.map(x=>({...base, brand:x.brand, qty:x.qty}))};
   }
+  const addPend = (pend, rs) => rs.forEach(x=>{ const sk=stockKey(x.gid,x.type,x.brand); pend[sk]=(pend[sk]||0)+x.qty; });
 
   const activeRows = () => mode==="single" ? rows : bulkRows;
   function render(){
@@ -651,11 +719,12 @@ function buildPage(kind, root){
     const p = cProd.get(), t = cType.get(), b = cBrand.get();
     if(!p){ msg("Pick a product from the suggestions",false); q(".f-product").focus(); return; }
     if(!t){ msg("Pick a type from the suggestions",false); q(".f-type").focus(); return; }
-    if(!b){ msg("Pick a brand from the suggestions",false); q(".f-brand").focus(); return; }
-    const pend = {}; rows.forEach(x=>{ const sk=stockKey(x.gid,x.type,x.brand); pend[sk]=(pend[sk]||0)+x.qty; });
-    const r = resolve(p.p, t.value, b.value, q(".f-qty").value, pend);
+    if(!b && isP){ msg("Pick a brand from the suggestions",false); q(".f-brand").focus(); return; }
+    if(!b && clean(q(".f-brand").value)){ msg("Pick the brand from the suggestions, or leave it empty",false); q(".f-brand").focus(); return; }
+    const pend = {}; addPend(pend, rows);
+    const r = resolve(p.p, t.value, b?b.value:"", q(".f-qty").value, pend);
     if(r.error){ msg(r.error,false); if(/Qty/.test(r.error)) q(".f-qty").focus(); return; }
-    rows.push(r.row);
+    rows.push(...r.rows);
     resetEntry(); q(".f-product").focus(); render();
   };
 
@@ -677,14 +746,14 @@ function buildPage(kind, root){
       const m = M();
       const wb = XLSX.read(await f.arrayBuffer(), {type:"array"});
       const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval:""});
-      const pend = {};
-      bulkRows = data.map(o=>{
+      const pend = {}, sm = stockMap(ledger());
+      bulkRows = data.flatMap(o=>{
         const k = {}; Object.keys(o).forEach(h=>k[h.toString().trim().toLowerCase()] = o[h]);
         const name = noSp(k.product);
         const p = m.products.find(x=>low(pName(x))===low(name));
-        const r = resolve(p, k.type, k.brand, k.qty, pend);
-        if(r.row){ const sk=stockKey(r.row.gid,r.row.type,r.row.brand); pend[sk]=(pend[sk]||0)+r.row.qty; }
-        return r.row || {product:name, type:clean(k.type), brand:clean(k.brand), qty:clean(k.qty), error:r.error};
+        const r = resolve(p, k.type, k.brand, k.qty, pend, sm);
+        if(r.rows){ addPend(pend, r.rows); return r.rows; }
+        return [{product:name, type:clean(k.type), brand:clean(k.brand), qty:clean(k.qty), error:r.error}];
       }).filter(r=>r.product || r.qty);
       if(!bulkRows.length) msg("No data rows found in the file.", false);
       render();
@@ -694,9 +763,9 @@ function buildPage(kind, root){
   /* final save */
   q(".save").onclick = async () => {
     clearMsg();
-    const invNo = clean(inv.value), party_ = clean(party.value);
+    const invNo = clean(inv.value), pv = cParty.get(), party_ = pv ? pv.value : "";
     if(!invNo){ msg("Invoice no. is required",false); return; }
-    if(!party_){ msg(partyLabel+" is required",false); return; }
+    if(!party_){ msg("Pick the "+partyLabel+" from the list. New vendors are added in Masters > Vendor.",false); party.focus(); return; }
     const src = activeRows();
     const list = src.map(r=>({company:r.company, model:r.model, product:r.product, type:r.type, brand:r.brand, group:r.group, code:r.code, qty:r.qty}));
     const b = q(".save"); b.disabled = true;
@@ -704,7 +773,7 @@ function buildPage(kind, root){
       const res = await api(act, {invoice:invNo, datetime:dt.value, party:party_, mode, rows:list});
       if(res.ok){
         msg(`Saved ${list.length} row(s) in invoice ${invNo}.` + (res.demo?" (demo mode, saved in this browser only)":""), true);
-        rows=[]; bulkRows=[]; q(".file").value=""; newHeader(); party.value="";
+        rows=[]; bulkRows=[]; q(".file").value=""; newHeader(); cParty.clear();
         b.disabled = true; q(".tot").textContent=""; q("tbody").innerHTML="";
       } else { msg(res.error||"Save failed", false); b.disabled=false; }
     }catch(e){ msg("Network error: "+e.message, false); b.disabled=false; }
@@ -715,19 +784,376 @@ function buildPage(kind, root){
 }
 
 /* =====================================================
-   STOCK PAGE  (current stock group-wise, history of every in/out, edit old entries)
+   ORDERS & RETURNS PAGE
+   Orders : upload Excel (A = SKU, B = Tracking ID) for one vendor (buyer). SKU -> Product Code via the SKU master.
+            The brand is NOT in the SKU: each piece is taken from whichever brand has stock (the brand that came in first goes first).
+   Returns: pick the vendor, scan tracking IDs. Matched with order history. Save = stock back IN, into the brand it was taken from.
+   ===================================================== */
+function buildOrders(root){
+  let view = "orders", rowsO = [], fileRows = 0, scans = [], oMsg = null, rMsg = null, oVendor = "", rVendor = "";
+  let hF = {q:"", st:"All", vendor:"", sort:"date_desc"};
+  root.innerHTML = `<div class="modes"></div><div class="body"></div>`;
+  const modes = $(".modes",root), body = $(".body",root);
+  const showDt = s => String(s||"").replace("T"," ");
+  const field = (l,n) => el("div",{}, el("label",{textContent:l}), n);
+  const stamp14 = () => { const d=new Date(); return stamp(d)+pad(d.getSeconds()); };
+  const banner = (m) => m ? el("div",{className:"msg "+(m.ok?"ok":"bad"),textContent:m.t}) : el("div");
+  const bdg = (t,c) => el("span",{className:"bdg "+c,textContent:t});
+  const errBox = t => el("div",{className:"msg bad",style:"display:block",textContent:t});
+
+  /* vendor (buyer) picker: must be chosen from the Vendor master */
+  function vendorCtl(getV, setV, onChange){
+    const inp = el("input",{placeholder:"type vendor name",autocomplete:"off"}), wrap = el("div",{},inp);
+    const c = combo(inp, ()=>vendorItems("buyer"), {onPick: it => { setV(it?it.value:""); if(onChange) onChange(); }});
+    if(getV() && vendorItems("buyer").some(x=>x.value===getV())) c.set({value:getV(),label:getV()}); else setV("");
+    return field("Vendor (Buyer)", wrap);
+  }
+
+  function awbIndex(){
+    const L = ledger(), orders = new Map(), rets = new Map();
+    L.forEach(e=>{
+      if(!e.awb) return; const k = low(e.awb);
+      if(e.kind==="Order" && !orders.has(k)) orders.set(k,e);
+      if(e.kind==="Return" && !rets.has(k)) rets.set(k,e);
+    });
+    return {L, orders, rets};
+  }
+
+  function draw(){
+    modes.innerHTML = "";
+    [["orders","Upload orders"],["returns","Returns (scan)"],["history","Order history"]].forEach(([k,l])=>{
+      const b = el("button",{textContent:l,className:k===view?"on":""}); b.onclick = ()=>{ view=k; draw(); }; modes.append(b); });
+    body.innerHTML = "";
+    ({orders:drawOrders, returns:drawReturns, history:drawHistory})[view]();
+  }
+
+  /* ---------------- ORDERS ---------------- */
+  /* One entry per tracking ID. The same tracking ID can come several times in a file:
+     - same SKU repeated  -> counted once (the last row is used) and a warning is shown
+     - different SKUs     -> the user chooses which product this tracking ID is for */
+  function groupRows(raw){
+    const out = [], idx = new Map();
+    raw.forEach(x=>{
+      if(!x.awb){ out.push({awb:"", sku:x.sku, n:1, cands:x.sku?[{sku:x.sku,n:1,last:1}]:[], pick:null}); return; }
+      const k = low(x.awb); let e = idx.get(k);
+      if(!e){ e = {awb:x.awb, sku:"", n:0, cands:[], pick:null}; idx.set(k,e); out.push(e); }
+      e.n++;
+      if(x.sku){
+        const nk = normSku(x.sku); let c = e.cands.find(c=>normSku(c.sku)===nk);
+        if(!c){ c = {sku:x.sku, n:0, last:0}; e.cands.push(c); }
+        c.n++; c.sku = x.sku; c.last = e.n;
+      }
+    });
+    out.forEach(e=>{ e.sku = e.cands.length===1 ? e.cands[0].sku : ""; });
+    return out;
+  }
+  function evalOrders(){
+    const m = M(), ix = awbIndex(), sm = stockMap(ix.L), used = {}, seen = new Set();
+    rowsO.forEach(r=>{
+      r.err = ""; r.newSku = false; r.res = null;
+      if(!r.awb){ r.err = "Tracking ID missing"; return; }
+      const ak = low(r.awb);
+      if(seen.has(ak)){ r.err = "Duplicate tracking ID in file"; return; }
+      seen.add(ak);
+      const o = ix.orders.get(ak);
+      if(o){ r.err = "Already ordered ("+showDt(o.datetime)+", "+o.invoice+")"; return; }
+      if(r.cands.length>1 && !r.pick){ r.err = "Different products on this tracking ID - choose one"; return; }
+      if(!r.sku){ r.err = "SKU missing"; return; }
+      const s = findSku(m, r.sku);
+      if(!s){ r.newSku = true; r.err = "New SKU - add it below"; return; }
+      const p = m.products.find(x=>pKey(x)===s.pk);
+      if(!p){ r.err = "Product of this SKU is missing in Masters"; return; }
+      const gi = groupInfo(m,p), gname = codeOf(s.type,gi.name);
+      const a = allocate(sm, gi.id, s.type, 1, "", used);
+      if(a.error){ r.err = "Out of stock ("+gname+")"; return; }
+      const part = a.parts[0]; used[part.key] = (used[part.key]||0)+1;
+      r.res = {company:p.company, model:p.model, product:pName(p), type:s.type, brand:part.brand, group:gname, gid:gi.id, code:codeOf(s.type,pName(p))};
+    });
+  }
+
+  function drawOrders(){
+    const tpl = el("button",{className:"btn ghost",textContent:"Download Excel template"});
+    tpl.onclick = () => {
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["SKU","Tracking ID"],["Eagle@kk Realme C53","AWB1234567890"]]), "Orders");
+      XLSX.writeFile(wb, "orders_template.xlsx");
+    };
+    const fi = el("input",{type:"file",accept:".xlsx,.xls,.csv"});
+    const dyn = el("div");
+    let refreshSave = () => {};
+    const vc = vendorCtl(()=>oVendor, v=>{ oVendor = v; }, ()=>refreshSave());
+    body.append(el("p",{className:"hint",style:"margin-top:0",textContent:"Pick the vendor (buyer) these orders are for, then upload the Excel: A = SKU, B = Tracking ID (one row = one piece). If a tracking ID comes more than once: the same SKU is counted once (last row, with a warning); different SKUs ask you to choose the product. Each SKU is mapped to its Product Code through the SKU master, and the brand is taken from whichever brand has stock. Save order takes the stock out and keeps the orders in history."}),
+      el("div",{className:"grid"}, vc, field("Upload orders Excel", fi), el("div",{style:"display:flex;align-items:end"}, tpl)), banner(oMsg), dyn);
+    oMsg = null;
+
+    fi.onchange = async () => {
+      const f = fi.files[0]; if(!f) return;
+      try{
+        const wb = XLSX.read(await f.arrayBuffer(), {type:"array"});
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:"", raw:false});
+        let start = 0;
+        /* skip the first row only when it is really a header (exact words), so a tracking ID like "AWB123" is never dropped */
+        if(aoa.length && (/^sku$/i.test(clean(aoa[0][0])) || /^(tracking\s*(id|no\.?|number)?|awb(\s*(no\.?|number))?)$/i.test(clean(aoa[0][1])))) start = 1;
+        const raw = aoa.slice(start).map(r=>({sku:clean(r[0]).replace(/\s+/g," "), awb:clean(r[1])})).filter(r=>r.sku||r.awb);
+        fileRows = raw.length; rowsO = groupRows(raw);
+        fi.value = "";
+        if(!rowsO.length){ dyn.innerHTML=""; dyn.append(errBox("No rows found in the file.")); return; }
+        render();
+      }catch(e){ dyn.innerHTML=""; dyn.append(errBox("Could not read the file: "+e.message)); }
+    };
+
+    function render(){
+      dyn.innerHTML = "";
+      refreshSave = () => {};
+      if(!rowsO.length) return;
+      evalOrders();
+      const ok = rowsO.filter(r=>!r.err).length, bad = rowsO.length-ok;
+      dyn.append(el("div",{className:"hint",style:"margin:6px 0",textContent:rowsO.length+" tracking ID(s)"+(fileRows&&fileRows!==rowsO.length?" (from "+fileRows+" file rows)":"")+"   |   Ready: "+ok+"   |   Need attention: "+bad}));
+
+      /* repeated / duplicate tracking IDs */
+      const reps = rowsO.filter(r=>r.n>1 && r.cands.length<=1), confs = rowsO.filter(r=>r.cands.length>1), open = confs.filter(r=>!r.pick);
+      if(reps.length || confs.length){
+        const wb_ = el("div",{className:"wbox"});
+        if(reps.length) wb_.append(el("div",{textContent:"⚠ "+reps.length+" tracking ID(s) are repeated with the same SKU ("+reps.map(r=>r.awb+" ×"+r.n).slice(0,5).join(", ")+(reps.length>5?", …":"")+"). Each is counted once, using the last row."}));
+        if(confs.length){
+          wb_.append(el("div",{style:reps.length?"margin-top:6px":"",textContent:"⚠ "+confs.length+" tracking ID(s) have different products in the file. Choose the product for each in the SKU column"+(open.length?" ("+open.length+" still to choose).":" (all chosen).")}));
+          if(open.length){
+            const useLast = el("button",{className:"btn ghost",textContent:"Use the last row for all ("+open.length+")",style:"margin-top:6px"});
+            useLast.onclick = () => { open.forEach(r=>{ const c = r.cands.slice().sort((a,b)=>b.last-a.last)[0]; r.pick = c.sku; r.sku = c.sku; }); render(); };
+            wb_.append(useLast);
+          }
+        }
+        dyn.append(wb_);
+      }
+
+      /* new SKUs: map them right here (only the Product Code is needed) */
+      const miss = new Map();
+      rowsO.filter(r=>r.newSku).forEach(r=>{ const k = normSku(r.sku); if(!miss.has(k)) miss.set(k,{sku:r.sku,n:0}); miss.get(k).n++; });
+      if(miss.size){
+        const codes = allCodes(M());
+        const panel = el("div",{className:"box"}, el("b",{textContent:"New SKUs ("+miss.size+") - pick the Product Code for each and add it"}));
+        if(!codes.length) panel.append(el("p",{className:"hint",textContent:"Add Types and Products in Masters first."}));
+        miss.forEach(({sku,n})=>{
+          const codeIn = el("input",{placeholder:"product code, e.g. eaglec53",autocomplete:"off"});
+          const c1 = el("div",{style:"flex:1;min-width:220px"},codeIn);
+          const add = el("button",{className:"btn",textContent:"Add SKU"}), er = el("div",{className:"err-t"});
+          const cc = combo(codeIn, ()=>codes.map(c=>({value:c.code,label:c.code,c})), {next:()=>add.focus()});
+          add.onclick = () => {
+            const pk = cc.get();
+            if(!pk){ er.textContent = "Pick a Product Code from the suggestions"; codeIn.focus(); return; }
+            const m2 = M(); if(findSku(m2,sku)){ render(); return; }
+            m2.skus.push({sku, type:pk.c.type, pk:pk.c.pk}); saveM(m2); render();
+          };
+          panel.append(el("div",{className:"row",style:"margin:8px 0 0"}, el("div",{style:"min-width:200px;flex:1.2"}, el("b",{textContent:sku}), el("div",{className:"hint",textContent:n+" row(s)"})), c1, add), er);
+        });
+        dyn.append(panel);
+      }
+
+      const trs = rowsO.slice(0,500).map((r,i)=>{
+        const x = el("button",{className:"x",textContent:"✕",title:"Remove row"});
+        x.onclick = () => { rowsO.splice(i,1); render(); };
+        let skuCell = r.sku;
+        if(r.cands.length>1){
+          const m3 = M(), sel = el("select",{style:"min-width:200px"}, el("option",{value:"",textContent:"-- choose product --"}));
+          r.cands.forEach(c=>{ const s3 = findSku(m3,c.sku), p3 = s3 && m3.products.find(x=>pKey(x)===s3.pk);
+            sel.append(el("option",{value:c.sku,textContent:c.sku+(p3?"  →  "+codeOf(s3.type,pName(p3)):"  (new SKU)")+(c.n>1?"  ×"+c.n:"")})); });
+          sel.value = r.pick || "";
+          sel.onchange = () => { r.pick = sel.value; r.sku = sel.value; render(); };
+          skuCell = sel;
+        }
+        const warn_ = !r.err && r.n>1;
+        return {cls:r.err?"err":(warn_?"warn":""), cells:[i+1, r.awb, skuCell, r.res?r.res.code:"", r.res?r.res.group:"", r.res?r.res.brand:"", r.err || (warn_ ? "OK - "+r.n+" rows for this ID, "+(r.cands.length>1?"chosen product used":"counted once") : "OK"), x]};
+      });
+      dyn.append(mkTable(["#","Tracking ID","SKU","Product code","Stock group","Brand (from stock)","Status",""], trs));
+      if(rowsO.length>500) dyn.append(el("p",{className:"hint",textContent:"Showing the first 500 rows. All "+rowsO.length+" rows are checked and saved."}));
+
+      const save = el("button",{className:"btn ok",textContent:"Save order ("+ok+" row"+(ok===1?"":"s")+")"});
+      const need = el("span",{className:"hint",style:"align-self:center"});
+      refreshSave = () => { save.disabled = bad>0 || !ok || !oVendor; need.textContent = !oVendor ? "Select the vendor (buyer) above to save." : ""; };
+      refreshSave();
+      const rm = el("button",{className:"btn ghost",textContent:"Remove rows with errors ("+bad+")"}); rm.style.display = bad ? "" : "none";
+      const clr = el("button",{className:"btn ghost",textContent:"Clear"});
+      rm.onclick = () => { rowsO = rowsO.filter(r=>!r.err); render(); };
+      clr.onclick = () => { rowsO = []; render(); };
+      save.onclick = async () => {
+        if(!oVendor){ refreshSave(); return; }
+        evalOrders(); if(rowsO.some(r=>r.err)){ render(); return; }
+        save.disabled = true;
+        const batch = {invoice:"ORD"+stamp14(), datetime:nowLocal(), party:oVendor, mode:"upload",
+          rows: rowsO.map(r=>({company:r.res.company, model:r.res.model, product:r.res.product, type:r.res.type, brand:r.res.brand, group:r.res.group, code:r.res.code, sku:r.sku, awb:r.awb, qty:1}))};
+        try{
+          const res = await api("saveOrders", batch);
+          if(res.ok){ oMsg = {ok:true, t:"Order saved for "+oVendor+": "+batch.rows.length+" piece(s) taken out of stock ("+batch.invoice+")."+(res.demo?" (demo mode, saved in this browser only)":"")}; rowsO = []; draw(); }
+          else { dyn.prepend(errBox(res.error||"Save failed")); save.disabled = false; }
+        }catch(e){ dyn.prepend(errBox("Network error: "+e.message)); save.disabled = false; }
+      };
+      dyn.append(el("div",{className:"row",style:"margin-top:12px"}, save, rm, clr, need));
+    }
+    render();
+  }
+
+  /* ---------------- RETURNS ---------------- */
+  function evalScan(ix, awb, vendor){
+    const k = low(awb), o = ix.orders.get(k), r = ix.rets.get(k);
+    if(!o) return {awb, err:"Not found in order history"};
+    if(r) return {awb:o.awb, o, err:"Already returned ("+showDt(r.datetime)+")"};
+    if(vendor && low(o.party)!==low(vendor)) return {awb:o.awb, o, err:"This order was for "+o.party};
+    return {awb:o.awb, o, err:""};
+  }
+  function drawReturns(){
+    const ta = el("textarea",{rows:2,placeholder:"Click here and scan tracking IDs one after another (Enter after each). You can also paste many at once.",
+      style:"width:100%;padding:8px 9px;border:1px solid var(--line);border-radius:7px;font:inherit"});
+    const info = el("div",{className:"hint",style:"min-height:18px;margin:4px 0"}), dyn = el("div");
+    const vc = vendorCtl(()=>rVendor, v=>{ rVendor = v; }, ()=>render());
+    body.append(el("p",{className:"hint",style:"margin-top:0",textContent:"Pick the vendor (buyer) the parcels came back from, then scan the tracking IDs. Each one is matched with the order history and shows its SKU and Product Code. Save returns puts the stock back (into the same brand it was taken from)."}),
+      el("div",{className:"grid"}, vc), banner(rMsg), ta, info, dyn);
+    rMsg = null;
+
+    const add = text => {
+      const toks = String(text).split(/[\s,;]+/).filter(Boolean); let dup = 0, added = 0;
+      toks.forEach(t=>{ if(scans.some(a=>low(a)===low(t))) dup++; else { scans.push(t); added++; } });
+      info.textContent = (added?added+" added":"") + (dup?(added?", ":"")+dup+" duplicate scan(s) ignored":"");
+      render();
+    };
+    ta.addEventListener("keydown", e => { if(e.key==="Enter"){ e.preventDefault(); const v = ta.value; ta.value = ""; if(clean(v)) add(v); } });
+    ta.addEventListener("paste", () => setTimeout(()=>{ const v = ta.value; ta.value = ""; if(clean(v)) add(v); }, 0));
+
+    function render(){
+      dyn.innerHTML = "";
+      if(!scans.length) return;
+      const ix = awbIndex(), items = scans.map(a=>evalScan(ix,a,rVendor)), ok = items.filter(i=>!i.err);
+      dyn.append(el("div",{className:"hint",style:"margin:6px 0",textContent:scans.length+" scanned   |   Matched: "+ok.length+"   |   Problem: "+(items.length-ok.length)}));
+      const trs = items.map((it,i)=>{
+        const x = el("button",{className:"x",textContent:"✕",title:"Remove"});
+        x.onclick = () => { scans.splice(i,1); render(); };
+        const o = it.o;
+        return {cls:it.err?"err":"", cells:[i+1, it.awb, o?o.party:"", o?o.sku:"", o?o.code:"", o?o.group:"", o?o.brand:"", o?showDt(o.datetime):"", it.err||"OK - will add to stock", x]};
+      }).reverse();                                   // newest scan on top
+      dyn.append(mkTable(["#","Tracking ID","Vendor","SKU","Product code","Stock group","Brand","Ordered on","Status",""], trs));
+      const save = el("button",{className:"btn ok",textContent:"Save returns ("+ok.length+")",disabled:!ok.length||!rVendor});
+      const need = el("span",{className:"hint",style:"align-self:center",textContent:!rVendor?"Select the vendor (buyer) above to save.":""});
+      const rm = el("button",{className:"btn ghost",textContent:"Remove problem rows ("+(items.length-ok.length)+")"}); rm.style.display = items.length-ok.length ? "" : "none";
+      const clr = el("button",{className:"btn ghost",textContent:"Clear all"});
+      rm.onclick = () => { scans = items.filter(i=>!i.err).map(i=>i.awb); render(); };
+      clr.onclick = () => { scans = []; render(); };
+      save.onclick = async () => {
+        if(!rVendor) return;
+        const ix2 = awbIndex(), now = scans.map(a=>evalScan(ix2,a,rVendor)), good = now.filter(i=>!i.err);
+        if(!good.length){ render(); return; }
+        save.disabled = true;
+        const batch = {invoice:"RET"+stamp14(), datetime:nowLocal(), party:rVendor, mode:"scan",
+          rows: good.map(i=>({company:i.o.company, model:i.o.model, product:i.o.product, type:i.o.type, brand:i.o.brand, group:i.o.group, code:i.o.code, sku:i.o.sku, awb:i.o.awb, qty:1, orderInvoice:i.o.invoice}))};
+        try{
+          const res = await api("saveReturns", batch);
+          if(res.ok){
+            const left = now.filter(i=>i.err).length;
+            scans = now.filter(i=>i.err).map(i=>i.awb);
+            rMsg = {ok:true, t:"Returns saved from "+rVendor+": "+good.length+" piece(s) added back to stock ("+batch.invoice+")."+(left?" "+left+" row(s) were not saved, check them below.":"")+(res.demo?" (demo mode, saved in this browser only)":"")};
+            draw();
+          } else { dyn.prepend(errBox(res.error||"Save failed")); save.disabled = false; }
+        }catch(e){ dyn.prepend(errBox("Network error: "+e.message)); save.disabled = false; }
+      };
+      dyn.append(el("div",{className:"row",style:"margin-top:12px"}, save, rm, clr, need));
+    }
+    render(); ta.focus();
+  }
+
+  /* ---------------- ORDER HISTORY ---------------- */
+  function drawHistory(){
+    const ix = awbIndex(), all = ix.L.filter(e=>e.kind==="Order");
+    const vendors = [...new Set(all.map(e=>e.party))].sort((a,b)=>a.localeCompare(b));
+    const flt = el("input",{placeholder:"Search tracking ID, SKU, product code, group...",value:hF.q});
+    const st = el("select",{}, ...[["All","All orders"],["Returned","Returned only"],["Not","Not returned"]].map(([v,t])=>el("option",{value:v,textContent:t})));
+    const vs = el("select",{}, el("option",{value:"",textContent:"All vendors"}), ...vendors.map(v=>el("option",{value:v,textContent:v})));
+    const so = el("select",{}, ...[["date_desc","Date (newest first)"],["date_asc","Date (oldest first)"],["awb","Tracking ID"],["vendor","Vendor"],["code","Product code"],["group","Stock group"]].map(([v,t])=>el("option",{value:v,textContent:t})));
+    st.value = hF.st; vs.value = vendors.includes(hF.vendor)?hF.vendor:""; so.value = hF.sort;
+    const sum = el("div",{className:"hint",style:"margin:4px 0"}), box = el("div");
+    body.append(el("div",{className:"grid"}, field("Search",flt), field("Show",st), field("Vendor",vs), field("Sort by",so)), sum, box);
+    const render = () => {
+      hF = {q:flt.value, st:st.value, vendor:vs.value, sort:so.value};
+      box.innerHTML = "";
+      const f = norm(flt.value), cmp = {
+        date_desc:(a,b)=>b.datetime.localeCompare(a.datetime)||a.idx-b.idx, date_asc:(a,b)=>a.datetime.localeCompare(b.datetime)||a.idx-b.idx,
+        awb:(a,b)=>a.awb.localeCompare(b.awb,undefined,{numeric:true}), vendor:(a,b)=>a.party.localeCompare(b.party)||a.awb.localeCompare(b.awb),
+        code:(a,b)=>a.code.localeCompare(b.code)||a.awb.localeCompare(b.awb), group:(a,b)=>a.group.localeCompare(b.group)||a.awb.localeCompare(b.awb)}[so.value];
+      const rows = all.filter(e=>{
+        const ret = ix.rets.has(low(e.awb));
+        if(st.value==="Returned" && !ret) return false;
+        if(st.value==="Not" && ret) return false;
+        if(vs.value && e.party!==vs.value) return false;
+        return score(norm([e.awb,e.sku,e.code,e.group,e.brand,e.invoice,e.party].join(" ")), f)!==null;
+      }).sort(cmp);
+      sum.textContent = rows.length+" order line(s)   |   Returned: "+rows.filter(e=>ix.rets.has(low(e.awb))).length;
+      if(!rows.length){ box.append(el("p",{className:"hint",textContent: all.length ? "Nothing matches." : "No orders yet. Upload an orders file and save it."})); return; }
+      box.append(mkTable(["Date","Batch","Vendor","Tracking ID","SKU","Product code","Stock group","Brand","Status"],
+        rows.slice(0,500).map(e=>{ const r = ix.rets.get(low(e.awb));
+          return {cells:[showDt(e.datetime), e.invoice, e.party, e.awb, e.sku, e.code, e.group, e.brand, r ? bdg("Returned "+showDt(r.datetime).slice(0,10),"in") : bdg("Out","out")]}; })));
+      if(rows.length>500) box.append(el("p",{className:"hint",textContent:"Showing the first 500 lines. Use the search to narrow down."}));
+    };
+    [flt,st,vs,so].forEach(x=>{ x.oninput = render; x.onchange = render; }); render();
+  }
+
+  draw();
+  return {draw};
+}
+
+/* =====================================================
+   STOCK PAGE  (current stock group-wise, history of every in/out, edit old entries) with filters and sort
    ===================================================== */
 function buildStock(root){
   let view = "stock";
+  /* filters and sort are remembered while you move between tabs */
+  const F = {q:"", type:"", group:"", brand:"", product:"", vendor:"", kind:"", from:"", to:"", hz:false,
+             sortS:"group", dirS:"asc", sortH:"date", dirH:"desc"};
   root.innerHTML = `<div class="modes"></div><div class="body"></div>`;
   const modes = $(".modes",root), body = $(".body",root);
   const showDt = s => String(s||"").replace("T"," ");
   const num = (v,cls="") => el("td",{textContent:String(v),className:"n "+cls});
-  const head = (cols) => el("thead",{},el("tr",{},...cols.map(h=>el("th",{textContent:h,className:/^(Purchased|Sold|Available|Qty)$/.test(h)?"n":""}))));
+  const head = (cols) => el("thead",{},el("tr",{},...cols.map(h=>el("th",{textContent:h,className:/^(Purchased|Sold|Available|Net|Qty)$/.test(h)?"n":""}))));
+  const field = (l,n) => el("div",{}, el("label",{textContent:l}), n);
   const negativeAfter = ov => {
     const neg = Object.values(stockMap(ledger(ov))).find(s=>s.in-s.out<0);
     return neg ? "This change would make stock negative for "+neg.group+" / "+neg.brand+" ("+(neg.in-neg.out)+")." : "";
   };
+
+  /* does an entry pass the current filters? (kind is only used by History) */
+  const pass = (e, useKind) => {
+    if(F.type && e.type!==F.type) return false;
+    if(F.group && e.groupName!==F.group) return false;
+    if(F.brand && e.brand!==F.brand) return false;
+    if(F.product && e.product!==F.product) return false;
+    if(F.vendor && e.party!==F.vendor) return false;
+    if(useKind && F.kind && e.kind!==F.kind) return false;
+    const d = e.datetime.slice(0,10);
+    if((F.from && d<F.from) || (F.to && d>F.to)) return false;
+    return score(norm([e.product,e.party,e.invoice,e.group,e.brand,e.code,e.awb,e.sku].join(" ")), norm(F.q))!==null;
+  };
+  const anyFilter = () => ["q","type","group","brand","product","vendor","kind","from","to"].some(k=>F[k]);
+
+  /* filter bar: dropdowns are filled from what is really in the ledger */
+  function filterBar(L, useKind, rerender, sorts, sortKey, dirKey){
+    const uniq = f => [...new Set(L.map(f).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    const sel = (label, key, vals, labels) => {
+      const s = el("select",{}, el("option",{value:"",textContent:"All"}), ...vals.map((v,i)=>el("option",{value:v,textContent:labels?labels[i]:v})));
+      if(!vals.includes(F[key])) F[key] = ""; s.value = F[key];
+      s.onchange = () => { F[key] = s.value; rerender(); }; return field(label, s);
+    };
+    const q = el("input",{placeholder:"Search anything... (ge60 finds Edge60)",value:F.q}); q.oninput = () => { F.q = q.value; rerender(); };
+    const from = el("input",{type:"date",value:F.from}), to = el("input",{type:"date",value:F.to});
+    from.onchange = () => { F.from = from.value; rerender(); }; to.onchange = () => { F.to = to.value; rerender(); };
+    const items = [field("Search",q), sel("Type","type",uniq(e=>e.type)), sel("Group","group",uniq(e=>e.groupName)), sel("Brand","brand",uniq(e=>e.brand)),
+      sel("Product","product",uniq(e=>e.product)), sel("Vendor","vendor",uniq(e=>e.party))];
+    if(useKind) items.push(sel("Movement","kind",["Purchase","Sale","Order","Return"],["Purchase (in)","Sale (out)","Order (out)","Return (in)"]));
+    items.push(field("From date",from), field("To date",to));
+    const so = el("select",{}, ...sorts.map(([v,t])=>el("option",{value:v,textContent:t}))); so.value = F[sortKey];
+    const dir = el("button",{className:"btn ghost",textContent:F[dirKey]==="asc"?"Ascending  ↑":"Descending  ↓",type:"button"});
+    so.onchange = () => { F[sortKey] = so.value; rerender(); };
+    dir.onclick = () => { F[dirKey] = F[dirKey]==="asc"?"desc":"asc"; dir.textContent = F[dirKey]==="asc"?"Ascending  ↑":"Descending  ↓"; rerender(); };
+    items.push(field("Sort by",so), field("Order", dir));
+    const clr = el("button",{className:"btn ghost",textContent:"Clear filters"});
+    clr.onclick = () => { ["q","type","group","brand","product","vendor","kind","from","to"].forEach(k=>F[k]=""); draw(); };
+    return el("div",{}, el("div",{className:"grid"}, ...items), el("div",{className:"row",style:"margin-top:-4px"}, clr));
+  }
 
   function draw(){
     modes.innerHTML = "";
@@ -738,75 +1164,79 @@ function buildStock(root){
 
   /* ----- Stock: group-wise ----- */
   function drawStock(){
-    const all = Object.values(stockMap(ledger()));
-    const tIn = all.reduce((a,s)=>a+s.in,0), tOut = all.reduce((a,s)=>a+s.out,0);
-    const cards = el("div",{className:"grid"});
-    [["Total purchased",tIn],["Total sold",tOut],["Available",tIn-tOut]].forEach(([l,v])=>cards.append(el("div",{className:"stat"}, el("div",{className:"hint",textContent:l}), el("div",{className:"big",textContent:String(v)}))));
-    const flt = el("input",{placeholder:"Search group, brand or product... (ge60 finds Edge60)"});
-    const hz = el("input",{type:"checkbox"});
-    const bar = el("div",{className:"row"}, el("div",{style:"flex:1;min-width:220px"},flt), el("label",{className:"chk"},hz,el("span",{textContent:"Hide zero stock"})));
-    const box = el("div");
-    body.append(cards, bar, box);
+    const L = ledger(), cards = el("div",{className:"grid"}), note_ = el("div",{className:"hint",style:"margin:4px 0"}), box = el("div");
+    const hz = el("input",{type:"checkbox",checked:F.hz}); hz.onchange = () => { F.hz = hz.checked; render(); };
+    const sorts = [["group","Group name"],["type","Type"],["brand","Brand"],["avail","Available / net qty"],["in","Purchased qty"],["out","Sold qty"]];
+    body.append(filterBar(L,false,()=>render(),sorts,"sortS","dirS"), el("label",{className:"chk",style:"margin:4px 0 8px"},hz,el("span",{textContent:"Hide zero stock"})), cards, note_, box);
     const render = () => {
+      const all = Object.values(stockMap(L.filter(e=>pass(e,false))));
+      const tIn = all.reduce((a,s)=>a+s.in,0), tOut = all.reduce((a,s)=>a+s.out,0);
+      cards.innerHTML = "";
+      const partial = !!(F.vendor||F.from||F.to||F.product);       // only some movements are counted, so in - out is a net figure, not stock in hand
+      [["Total purchased",tIn],["Total sold",tOut],[partial?"Net (in − out)":"Available",tIn-tOut]].forEach(([l,v])=>cards.append(el("div",{className:"stat"}, el("div",{className:"hint",textContent:l}), el("div",{className:"big",textContent:String(v)}))));
+      note_.textContent = partial ? "A vendor, product or date filter is on: only those movements are counted, so the last column is the net of the filtered movements (it is not the stock in hand)." : "";
       box.innerHTML = "";
-      const f = norm(flt.value);
-      const rows = all.filter(s=> !(hz.checked && s.in-s.out===0) && score(norm(s.group+" "+s.brand+" "+Object.keys(s.products).join(" ")), f)!==null);
-      if(!rows.length){ box.append(el("p",{className:"hint",textContent: all.length ? "Nothing matches." : "No stock yet. Save a purchase and it will show here."})); return; }
+      const rows = all.filter(s=>!(F.hz && s.in-s.out===0));
+      if(!rows.length){ box.append(el("p",{className:"hint",textContent: L.length ? "Nothing matches." : "No stock yet. Save a purchase and it will show here."})); return; }
+      const dir = F.dirS==="asc" ? 1 : -1, key = F.sortS;
       const by = new Map(); rows.forEach(s=>{ if(!by.has(s.group)) by.set(s.group,[]); by.get(s.group).push(s); });
-      const t = el("table"); t.append(head(["Stock group / Brand","Purchased","Sold","Available","Products (in / out)"]));
+      const groups = [...by.entries()].map(([g,list])=>({g, list, type:list[0].type, name:list[0].groupName||g,
+        in:list.reduce((a,s)=>a+s.in,0), out:list.reduce((a,s)=>a+s.out,0), brand:list.map(s=>s.brand).sort()[0]||""}));
+      groups.forEach(x=>x.avail = x.in-x.out);
+      const gc = {group:(a,b)=>a.name.localeCompare(b.name)||a.type.localeCompare(b.type), type:(a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name),
+        brand:(a,b)=>a.brand.localeCompare(b.brand)||a.name.localeCompare(b.name), avail:(a,b)=>a.avail-b.avail, in:(a,b)=>a.in-b.in, out:(a,b)=>a.out-b.out}[key];
+      groups.sort((a,b)=>dir*gc(a,b));
+      const bc = {avail:(a,b)=>(a.in-a.out)-(b.in-b.out), in:(a,b)=>a.in-b.in, out:(a,b)=>a.out-b.out}[key] || ((a,b)=>a.brand.localeCompare(b.brand));
+      const t = el("table"); t.append(head(["Stock group / Brand","Purchased","Sold",partial?"Net":"Available","Products (in / out)"]));
       const tb = el("tbody");
-      [...by.keys()].sort((a,b)=>a.localeCompare(b)).forEach(g=>{
-        const list = by.get(g).sort((a,b)=>a.brand.localeCompare(b.brand));
-        const sIn = list.reduce((a,s)=>a+s.in,0), sOut = list.reduce((a,s)=>a+s.out,0), sAv = sIn-sOut;
-        tb.append(el("tr",{className:"grp"}, el("td",{textContent:g}), num(sIn), num(sOut), num(sAv, sAv<0?"neg":""), el("td")));
-        list.forEach(s=>{
+      groups.forEach(x=>{
+        tb.append(el("tr",{className:"grp"}, el("td",{textContent:x.g}), num(x.in), num(x.out), num(x.avail, x.avail<0&&!partial?"neg":""), el("td")));
+        x.list.sort((a,b)=>dir*bc(a,b)).forEach(s=>{
           const av = s.in-s.out;
-          tb.append(el("tr",{}, el("td",{textContent:s.brand,style:"padding-left:24px"}), num(s.in), num(s.out), num(av, av<0?"neg":av===0?"zero":""),
+          tb.append(el("tr",{}, el("td",{textContent:s.brand,style:"padding-left:24px"}), num(s.in), num(s.out), num(av, av<0&&!partial?"neg":av===0?"zero":""),
             el("td",{className:"hint",textContent:Object.entries(s.products).map(([n,v])=>n+": +"+v.in+" / -"+v.out).join("   ·   ")})));
         });
       });
       t.append(tb); box.append(el("div",{className:"wrap"},t));
     };
-    flt.oninput = render; hz.onchange = render; render();
+    render();
   }
 
   /* ----- History: every in/out line ----- */
   function drawHistory(){
-    const all = ledger().sort((a,b)=> b.datetime.localeCompare(a.datetime) || String(b.invoice).localeCompare(String(a.invoice)) || a.idx-b.idx);
-    const flt = el("input",{placeholder:"Search product, vendor/customer, invoice, group..."});
-    const kind = el("select",{}, el("option",{value:"All",textContent:"All (in + out)"}), el("option",{value:"Purchase",textContent:"Purchase (in)"}), el("option",{value:"Sale",textContent:"Sale (out)"}));
-    const from = el("input",{type:"date"}), to = el("input",{type:"date"});
-    const field = (l,n) => el("div",{}, el("label",{textContent:l}), n);
-    const sum = el("div",{className:"hint",style:"margin:4px 0"}), box = el("div");
-    body.append(el("div",{className:"grid"}, field("Search",flt), field("Show",kind), field("From date",from), field("To date",to)), sum, box);
+    const L = ledger(), sum = el("div",{className:"hint",style:"margin:4px 0"}), box = el("div");
+    const sorts = [["date","Date"],["invoice","Invoice / Batch"],["product","Product"],["type","Type"],["group","Group"],["brand","Brand"],["vendor","Vendor"],["qty","Qty"],["awb","Tracking ID"]];
+    body.append(filterBar(L,true,()=>render(),sorts,"sortH","dirH"), sum, box);
     const render = () => {
       box.innerHTML = "";
-      const f = norm(flt.value), fd = from.value, td = to.value;
-      const rows = all.filter(e=>{
-        if(kind.value!=="All" && e.kind!==kind.value) return false;
-        const d = e.datetime.slice(0,10);
-        if((fd && d<fd) || (td && d>td)) return false;
-        return score(norm([e.product,e.party,e.invoice,e.group,e.brand,e.code].join(" ")), f)!==null;
-      });
-      const sIn = rows.filter(e=>e.kind==="Purchase").reduce((a,e)=>a+e.qty,0), sOut = rows.filter(e=>e.kind==="Sale").reduce((a,e)=>a+e.qty,0);
+      const dir = F.dirH==="asc" ? 1 : -1;
+      const cmp = {date:(a,b)=>a.datetime.localeCompare(b.datetime)||String(a.invoice).localeCompare(String(b.invoice))||a.idx-b.idx,
+        invoice:(a,b)=>String(a.invoice).localeCompare(String(b.invoice),undefined,{numeric:true})||a.idx-b.idx,
+        product:(a,b)=>a.product.localeCompare(b.product)||a.datetime.localeCompare(b.datetime), type:(a,b)=>a.type.localeCompare(b.type)||a.product.localeCompare(b.product),
+        group:(a,b)=>a.group.localeCompare(b.group)||a.product.localeCompare(b.product), brand:(a,b)=>a.brand.localeCompare(b.brand)||a.product.localeCompare(b.product),
+        vendor:(a,b)=>a.party.localeCompare(b.party)||a.datetime.localeCompare(b.datetime), qty:(a,b)=>a.qty-b.qty,
+        awb:(a,b)=>a.awb.localeCompare(b.awb,undefined,{numeric:true})}[F.sortH];
+      const rows = L.filter(e=>pass(e,true)).sort((a,b)=>dir*cmp(a,b));
+      const sIn = rows.filter(e=>IN_KINDS.includes(e.kind)).reduce((a,e)=>a+e.qty,0), sOut = rows.filter(e=>!IN_KINDS.includes(e.kind)).reduce((a,e)=>a+e.qty,0);
       sum.textContent = rows.length+" line(s)   |   In: "+sIn+"   |   Out: "+sOut;
-      if(!rows.length){ box.append(el("p",{className:"hint",textContent: all.length ? "Nothing matches." : "No entries yet."})); return; }
-      const t = el("table"); t.append(head(["Date","Invoice","Movement","From","To","Product","Type","Brand","Stock group","Qty",""]));
+      if(!rows.length){ box.append(el("p",{className:"hint",textContent: L.length ? "Nothing matches." : "No entries yet."})); return; }
+      const t = el("table"); t.append(head(["Date","Invoice","Movement","From","To","Product","Type","Brand","Stock group","Qty","Edit / Tracking ID"]));
       const tb = el("tbody");
       rows.slice(0,500).forEach(e=>{
-        const isIn = e.kind==="Purchase", eb = el("button",{className:"btn ghost",textContent:"Edit"});
-        eb.onclick = () => openEditor(e.kind, e.invoice, draw);
+        const isIn = IN_KINDS.includes(e.kind), editable = e.kind==="Purchase" || e.kind==="Sale";
+        const eb = editable ? el("button",{className:"btn ghost",textContent:"Edit"}) : el("span",{className:"hint",textContent:e.awb||""});
+        if(editable) eb.onclick = () => openEditor(e.kind, e.invoice, draw);
         tb.append(el("tr",{},
           el("td",{textContent:showDt(e.datetime),style:"white-space:nowrap"}), el("td",{textContent:e.invoice}),
-          el("td",{},el("span",{className:"bdg "+(isIn?"in":"out"),textContent:isIn?"IN · Purchase":"OUT · Sale"})),
+          el("td",{},el("span",{className:"bdg "+(isIn?"in":"out"),textContent:(isIn?"IN · ":"OUT · ")+e.kind})),
           el("td",{textContent:isIn?e.party:"Stock"}), el("td",{textContent:isIn?"Stock":e.party}),
           el("td",{textContent:e.product}), el("td",{textContent:e.type}), el("td",{textContent:e.brand}), el("td",{textContent:e.group}),
           num(e.qty), el("td",{},eb)));
       });
       t.append(tb); box.append(el("div",{className:"wrap"},t));
-      if(rows.length>500) box.append(el("p",{className:"hint",textContent:"Showing the latest 500 lines. Use the filters to narrow down."}));
+      if(rows.length>500) box.append(el("p",{className:"hint",textContent:"Showing the first 500 lines. Use the filters to narrow down."}));
     };
-    [flt,kind,from,to].forEach(x=>{ x.oninput = render; x.onchange = render; }); render();
+    render();
   }
 
   /* ----- edit / delete an old invoice ----- */
@@ -814,13 +1244,15 @@ function buildStock(root){
     const store = STORES.find(s=>s[0]===kind)[1];
     const all = ls(store,[]), idx = all.findIndex(x=>x.invoice===invNo);
     if(idx<0) return note("Invoice not found.");
-    const orig = all[idx], m = M(), isIn = kind==="Purchase";
+    const orig = all[idx], m = M(), isIn = kind==="Purchase", role = isIn ? "seller" : "buyer";
     const rowsE = (orig.rows||[]).map(r=>({pk:low(r.company)+"|"+low(r.model), type:r.type, brand:r.brand, qty:r.qty}));
     const ov = el("div",{className:"ovl"}), box = el("div",{className:"dlg wide"});
     const close = () => ov.remove();
     const err = el("div",{className:"err-t"});
     const fail = t => { err.textContent = t; };
-    const invIn = el("input",{value:orig.invoice}), dtIn = el("input",{type:"datetime-local",value:orig.datetime||""}), partyIn = el("input",{value:orig.party||""});
+    const invIn = el("input",{value:orig.invoice}), dtIn = el("input",{type:"datetime-local",value:orig.datetime||""});
+    const partyIn = el("select"); const names = vendorItems(role).map(x=>x.value); if(orig.party && !names.includes(orig.party)) names.unshift(orig.party);
+    names.forEach(n=>partyIn.append(el("option",{value:n,textContent:n}))); partyIn.value = orig.party || "";
     const f = (l,n) => el("div",{}, el("label",{textContent:l}), n);
     const rowsBox = el("div",{className:"wrap"});
 
@@ -856,7 +1288,7 @@ function buildStock(root){
       fail("");
       const inv2 = clean(invIn.value), party2 = clean(partyIn.value);
       if(!inv2) return fail("Invoice no. is required");
-      if(!party2) return fail((isIn?"Vendor":"Customer")+" is required");
+      if(!party2) return fail("Pick the vendor");
       if(!rowsE.length) return fail("Add at least one row, or delete the invoice.");
       if(inv2!==orig.invoice && all.some(x=>x.invoice===inv2)) return fail("Invoice no. already exists");
       const rows2 = [];
@@ -881,7 +1313,7 @@ function buildStock(root){
 
     drawRows();
     box.append(el("h3",{textContent:"Edit "+kind.toLowerCase()+" invoice "+orig.invoice}),
-      el("div",{className:"grid"}, f("Invoice No.",invIn), f("Date & Time",dtIn), f(isIn?"Vendor":"Customer",partyIn)),
+      el("div",{className:"grid"}, f("Invoice No.",invIn), f("Date & Time",dtIn), f(isIn?"Vendor (Seller)":"Vendor (Buyer)",partyIn)),
       rowsBox, addRow, err,
       el("div",{className:"row",style:"justify-content:space-between;margin:12px 0 0"}, del, el("div",{className:"row",style:"margin:0"}, cancel, save)));
     ov.append(box); document.body.append(ov);
@@ -894,17 +1326,19 @@ function buildStock(root){
 buildMasters($("#pageM"));
 buildPage("purchase", $("#pageP"));
 buildPage("sale", $("#pageS"));
+const ordersPage = buildOrders($("#pageO"));
 const stockPage = buildStock($("#pageT"));
 
 /* tabs */
 function tab(which){
-  ["M","P","S","T"].forEach(k=>{
+  ["M","P","S","O","T"].forEach(k=>{
     $("#page"+k).classList.toggle("hide", which!==k);
     $("#tab"+k).classList.toggle("on", which===k);
   });
   if(which==="T") stockPage.draw();            // always show fresh numbers
+  if(which==="O") ordersPage.draw();
 }
-$("#tabM").onclick=()=>tab("M"); $("#tabP").onclick=()=>tab("P"); $("#tabS").onclick=()=>tab("S"); $("#tabT").onclick=()=>tab("T");
+$("#tabM").onclick=()=>tab("M"); $("#tabP").onclick=()=>tab("P"); $("#tabS").onclick=()=>tab("S"); $("#tabO").onclick=()=>tab("O"); $("#tabT").onclick=()=>tab("T");
 $("#who").textContent = CONFIG.API_URL ? "" : "DEMO mode (no server connected)";
 </script>
 </body>
