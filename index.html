@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ERP - Masters, Purchase & Sale</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{--bg:#f4f6fa;--card:#fff;--ink:#1b2430;--mut:#6b7686;--line:#dfe4ec;--pri:#1f5eff;--ok:#12805c;--bad:#c62828;--sale:#b45309}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:#12203a;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+  header b{font-size:16px}
+  #who{font-size:12px;opacity:.8}
+  nav{display:flex;gap:6px;padding:12px 16px 0;max-width:1100px;margin:auto}
+  nav button{border:1px solid var(--line);background:#e9edf4;padding:9px 18px;border-radius:8px 8px 0 0;cursor:pointer;font-weight:600;color:var(--mut)}
+  nav button.on{background:var(--card);color:var(--ink);border-bottom-color:var(--card)}
+  main{max-width:1100px;margin:auto;padding:0 16px 40px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:0 10px 10px 10px;padding:16px}
+  .modes{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .modes button{padding:7px 16px;border:1px solid var(--line);background:#fff;border-radius:20px;cursor:pointer}
+  .modes button.on{background:var(--pri);border-color:var(--pri);color:#fff}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:12px}
+  label{display:block;font-size:12px;color:var(--mut);margin-bottom:3px}
+  input,select{width:100%;padding:8px 9px;border:1px solid var(--line);border-radius:7px;font:inherit;background:#fff}
+  input:disabled{background:#f1f3f7}
+  input[readonly]{background:#f1f3f7;color:var(--mut)}
+  .btn{padding:8px 14px;border:0;border-radius:7px;cursor:pointer;font:inherit;font-weight:600;background:var(--pri);color:#fff}
+  .btn.ok{background:var(--ok)} .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+  .btn.sale{background:var(--sale)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin:6px 0 12px}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left}
+  th{font-size:12px;color:var(--mut);background:#f8fafc}
+  tr.err td{background:#fdeaea}
+  .x{background:none;border:0;color:var(--bad);cursor:pointer;font-size:16px}
+  .wrap{overflow-x:auto}
+  .msg{margin:10px 0;padding:9px 12px;border-radius:7px;display:none}
+  .msg.ok{display:block;background:#e5f6ee;color:var(--ok)} .msg.bad{display:block;background:#fdeaea;color:var(--bad)}
+  .hint{color:var(--mut);font-size:12px}
+  .err-t{color:var(--bad);font-size:12px;min-height:16px}
+  .tot{font-weight:700;text-align:right;margin-top:8px}
+  .hide{display:none}
+  .box{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px}
+  .chip{display:inline-flex;align-items:center;gap:4px;background:#eaf0ff;color:#1b3a9b;border-radius:14px;padding:3px 6px 3px 10px;margin:2px 4px 2px 0;font-size:13px}
+  .chip .x{font-size:13px;padding:0 3px}
+  .chk{display:flex;gap:6px;align-items:center;padding:3px 0;font-size:13px;color:var(--ink);margin:0}
+  .chk input{width:auto}
+  .list{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:7px;padding:6px 10px;margin:6px 0}
+  .ovl{position:fixed;inset:0;background:rgba(10,20,40,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px}
+  .dlg{background:#fff;border-radius:10px;padding:18px 20px;max-width:420px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  .dlg p{margin:0}
+  .dlg.wide{max-width:860px;max-height:90vh;overflow:auto}
+  .dlg h3{margin:0 0 10px}
+  .stat{border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+  .stat .big{font-size:24px;font-weight:700}
+  td.n,th.n{text-align:right}
+  .neg{color:var(--bad);font-weight:700} .zero{color:var(--mut)}
+  tr.grp td{background:#f3f6fb;font-weight:700}
+  .bdg{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600;white-space:nowrap}
+  .bdg.in{background:#e5f6ee;color:var(--ok)} .bdg.out{background:#fff1e0;color:var(--sale)}
+  .fld{position:relative}
+  .sug{position:absolute;left:0;right:0;top:100%;z-index:20;background:#fff;border:1px solid var(--line);border-radius:7px;box-shadow:0 6px 18px rgba(0,0,0,.12);max-height:240px;overflow:auto;margin-top:2px}
+  .sg{padding:7px 10px;cursor:pointer}
+  .sg.on,.sg:hover{background:#eaf0ff}
+</style>
+</head>
+<body>
+<header><b>ERP Software</b><span id="who"></span></header>
+<nav>
+  <button id="tabM" class="on">Masters</button>
+  <button id="tabP">Purchase</button>
+  <button id="tabS">Sale</button>
+  <button id="tabT">Stock</button>
+</nav>
+<main>
+  <div class="card">
+    <div id="pageM"></div>
+    <div id="pageP" class="hide"></div>
+    <div id="pageS" class="hide"></div>
+    <div id="pageT" class="hide"></div>
+  </div>
+</main>
+
+<script>
+/* ========= CONFIG =========
+   Paste your Apps Script Web App URL here.
+   Empty = DEMO mode (data kept in this browser only, for testing). */
+const CONFIG = { API_URL: "" };
+let ID_TOKEN = "";   // Google Sign-In token, set by the login page later
+
+/* ---------- helpers ---------- */
+const $ = (s, r=document) => r.querySelector(s);
+const pad = n => String(n).padStart(2,"0");
+const stamp = d => d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+pad(d.getHours())+pad(d.getMinutes());
+const nowLocal = () => { const d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+pad(d.getHours())+":"+pad(d.getMinutes()); };
+const clean = v => String(v ?? "").trim();
+const low = v => clean(v).toLowerCase();
+const noSp = v => String(v ?? "").replace(/\s+/g,"");           // product names never contain spaces
+const norm = v => low(v).replace(/[\s\-_.]/g,"");               // for searching/matching
+const ls = (k, def) => { try { return JSON.parse(localStorage.getItem(k)) ?? def; } catch { return def; } };
+const lsSet = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+function el(tag, props={}, ...kids){ const e=document.createElement(tag); Object.assign(e,props); kids.forEach(k=>e.append(k)); return e; }
+
+/* ---------- in-page dialogs (browser alert/confirm are blocked inside previews, so buttons looked dead) ---------- */
+function dialog(text, withCancel){
+  return new Promise(res=>{
+    const ov = el("div",{className:"ovl"});
+    const box = el("div",{className:"dlg"}, el("p",{textContent:text}));
+    const row = el("div",{className:"row",style:"justify-content:flex-end;margin:14px 0 0"});
+    const done = v => { ov.remove(); res(v); };
+    if(withCancel){ const c = el("button",{className:"btn ghost",textContent:"Cancel"}); c.onclick = () => done(false); row.append(c); }
+    const ok = el("button",{className:"btn",textContent:withCancel?"Yes, continue":"OK"}); ok.onclick = () => done(true); row.append(ok);
+    box.append(row); ov.append(box); document.body.append(ov); ok.focus();
+  });
+}
+const note = t => dialog(t,false);
+const ask  = t => dialog(t,true);
+
+/* simple table builder: rows = [{cells:[string|Node], cls}] */
+function mkTable(cols, rows){
+  const t = el("table"); t.append(el("thead",{},el("tr",{},...cols.map(h=>el("th",{textContent:h})))));
+  const tb = el("tbody");
+  rows.forEach(r=>{ const tr = el("tr",{className:r.cls||""}); r.cells.forEach(c=>tr.append(typeof c==="object" ? el("td",{},c) : el("td",{textContent:String(c)}))); tb.append(tr); });
+  t.append(tb); return el("div",{className:"wrap"},t);
+}
+
+/* ---------- fuzzy search: "ge60" finds edge60 and edge60fusion ---------- */
+function score(h, t){                 // h, t already normalised. lower = better, null = no match
+  if(!t) return 0;
+  if(h.startsWith(t)) return 0;
+  const i = h.indexOf(t); if(i>=0) return 1 + i/100;
+  let j = 0, first = -1;
+  for(let k=0;k<h.length && j<t.length;k++){ if(h[k]===t[j]){ if(first<0) first=k; j++; } }
+  return j===t.length ? 2 + (h.length-first)/100 : null;
+}
+function rank(items, text){           // items: [{value,label}]
+  const t = norm(text);
+  return items.map(it=>({it, s:score(norm(it.label), t)})).filter(x=>x.s!==null)
+    .sort((a,b)=>a.s-b.s || a.it.label.length-b.it.label.length).map(x=>x.it);
+}
+
+/* ---------- type-ahead field: type a few letters, Enter to pick, jumps to next field ---------- */
+function combo(input, getItems, opts={}){
+  const wrap = input.parentElement; wrap.classList.add("fld");
+  const box = el("div",{className:"sug hide"}); wrap.append(box);
+  let items = [], act = 0, picked = null;
+  const render = () => {
+    box.innerHTML = "";
+    items.forEach((it,i)=>{ const d = el("div",{className:"sg"+(i===act?" on":""),textContent:it.label});
+      d.onmousedown = e => { e.preventDefault(); pick(it,true); }; box.append(d); });
+    box.classList.toggle("hide", !items.length);
+    const on = box.querySelector(".on"); if(on) on.scrollIntoView({block:"nearest"});
+  };
+  const refresh = () => { items = rank(getItems(), input.value).slice(0,40); act = 0; render(); };
+  function pick(it, advance){
+    picked = it; input.value = it.label; items = []; render();
+    if(opts.onPick) opts.onPick(it);
+    if(advance && opts.next) opts.next();
+  }
+  input.addEventListener("input", () => { picked = null; if(opts.onPick) opts.onPick(null); refresh(); });
+  input.addEventListener("focus", refresh);
+  input.addEventListener("keydown", e => {
+    if(e.key==="ArrowDown"){ e.preventDefault(); if(items.length){ act=Math.min(act+1,items.length-1); render(); } }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); act=Math.max(act-1,0); render(); }
+    else if(e.key==="Escape"){ items=[]; render(); }
+    else if(e.key==="Enter"){ e.preventDefault(); if(items.length) pick(items[act],true); else if(picked && opts.next) opts.next(); }
+    else if(e.key==="Tab"){ if(items.length && !picked) pick(items[act],false); }
+  });
+  input.addEventListener("blur", () => setTimeout(()=>{
+    items=[]; render();
+    if(!picked){ const ex = getItems().find(it=>norm(it.label)===norm(input.value)); if(ex) pick(ex,false); }
+  },120));
+  return { get:()=>picked, clear(){ picked=null; input.value=""; items=[]; render(); }, setDisabled(b){ input.disabled=b; },
+           set(it){ picked=it; input.value=it?it.label:""; items=[]; render(); } };
+}
+
+/* ---------- MASTERS data model ----------
+   products : [{company, model}]                  product name = company+model, no spaces (InfinixHot4)
+   types    : ["TPU","Silicon",...]
+   brands   : [{type, name}]                      brand belongs to a type (TPU -> Zigzag)
+   groups   : [{id, name, products:[productKey]}] equal-model group (a product is in one group only)
+   Stock is counted per  GROUP + TYPE + BRAND  (Edge60 50 + Edge60Fusion 40 = 90 pcs). No product codes. */
+const M  = () => Object.assign({products:[],types:[],brands:[],groups:[],skus:[]}, ls("erp_m3",{}));
+const saveM = m => { lsSet("erp_m3", m); window.dispatchEvent(new Event("mastersChanged")); };
+const pKey  = p => low(p.company)+"|"+low(p.model);
+const pName = p => p.company+p.model;
+const groupOf = (m,p) => m.groups.find(g=>g.products.includes(pKey(p)));
+const groupInfo = (m,p) => { const g=groupOf(m,p); return g ? {id:g.id,name:g.name} : {id:"p:"+pKey(p), name:pName(p)}; };
+/* Product Code = Type_ProductName  (TPU_RealmeC53, Eagle_RealmeC53, TPU_MotoEdge60Fusion).
+   The Group is NOT part of the code; it only decides how stock is added up. */
+const codeOf = (type, productName) => noSp(type)+"_"+noSp(productName);
+/* every valid Product Code right now: each Type x each Product */
+function allCodes(m){
+  const out = [];
+  m.types.forEach(t=>m.products.forEach(p=>out.push({code:codeOf(t,pName(p)), type:t, pk:pKey(p)})));
+  return out;
+}
+
+/* ---------- SKU helpers ---------- */
+const normSku = v => low(String(v ?? "").replace(/\s+/g," "));
+const findSku = (m,sku) => m.skus.find(s=>normSku(s.sku)===normSku(sku));
+function skuBrand(m,s){                          // brand of a SKU: its own, or the only brand of its type
+  const bs = m.brands.filter(b=>b.type===s.type);
+  const own = bs.find(b=>b.name===s.brand); if(own) return own.name;
+  return bs.length===1 ? bs[0].name : "";
+}
+
+/* ---------- LEDGER: every saved purchase/sale line. Group is worked out from the CURRENT Masters. ---------- */
+const stockKey = (gid,type,brand) => [gid,low(type),low(brand)].join("|");
+const STORES = [["Purchase","erp_purchase"],["Sale","erp_sale"],["Order","erp_orders"],["Return","erp_returns"]];
+const IN_KINDS = ["Purchase","Return"];          // Purchase and Return add stock; Sale and Order deduct it
+function ledger(ov={}){                          // ov = optional {erp_purchase:[...], erp_sale:[...]} to test an edit before saving it
+  const m = M(), out = [];
+  STORES.forEach(([kind,store])=>(ov[store] || ls(store,[])).forEach(inv=>(inv.rows||[]).forEach((r,i)=>{
+    const p = m.products.find(x=>low(x.company)===low(r.company) && low(x.model)===low(r.model));
+    const gi = p ? groupInfo(m,p) : {id:"p:"+low(r.company)+"|"+low(r.model), name:r.product};
+    out.push({kind, store, invoice:inv.invoice, datetime:inv.datetime||"", party:inv.party||"", idx:i,
+      product:r.product, company:r.company, model:r.model, pk:low(r.company)+"|"+low(r.model),
+      type:r.type, brand:r.brand, gid:gi.id, groupName:gi.name, group:codeOf(r.type,gi.name),
+      code:codeOf(r.type,r.product), awb:r.awb||"", sku:r.sku||"", qty:Number(r.qty)||0});
+  })));
+  return out;
+}
+function stockMap(entries){                       // stock is added up per GROUP + TYPE + BRAND
+  const mp = {};
+  entries.forEach(e=>{
+    const k = stockKey(e.gid,e.type,e.brand);
+    const s = mp[k] || (mp[k] = {key:k,gid:e.gid,type:e.type,brand:e.brand,group:e.group,in:0,out:0,products:{}});
+    const pr = s.products[e.product] || (s.products[e.product] = {in:0,out:0});
+    if(IN_KINDS.includes(e.kind)){ s.in+=e.qty; pr.in+=e.qty; } else { s.out+=e.qty; pr.out+=e.qty; }
+  });
+  return mp;
+}
+const availableQty = (gid,type,brand) => { const s = stockMap(ledger())[stockKey(gid,type,brand)]; return s ? s.in - s.out : 0; };
+const usedProducts = () => [...new Set(ledger().map(e=>e.pk))];
+const typeBrandUsed = (type,brand) => ledger().some(e=>e.type===type && (brand===undefined || e.brand===brand));
+const groupUsed = gid => ledger().some(e=>e.gid===gid);
+
+/* ---------- backend call ---------- */
+async function api(action, payload){
+  if(!CONFIG.API_URL){                         // DEMO mode
+    const store = action==="savePurchase" ? "erp_purchase" : "erp_sale";
+    const all = ls(store, []);
+    if(all.some(x=>x.invoice===payload.invoice)) return {ok:false, error:"Invoice no. already exists"};
+    all.push(payload); lsSet(store, all); return {ok:true, demo:true};
+  }
+  const res = await fetch(CONFIG.API_URL, {method:"POST", headers:{"Content-Type":"text/plain"},
+    body: JSON.stringify({action, token: ID_TOKEN, ...payload})});
+  return res.json();
+}
+
+/* =====================================================
+   MASTERS PAGE  (Product / Type / Brand / Group)
+   ===================================================== */
+function buildMasters(root){
+  let cur = "product", gSel = new Set(), gNameEdited = false;
+  root.innerHTML = `<div class="modes"></div><div class="body"></div>`;
+  const modes = $(".modes",root), body = $(".body",root);
+  const tabs = [["product","Product"],["type","Type"],["brand","Brand"],["group","Group"],["sku","SKU"]];
+
+  const tbl = (heads, rows) => {
+    const t = el("table"), h = el("tr");
+    heads.forEach(x=>h.append(el("th",{textContent:x}))); t.append(el("thead",{},h));
+    const tb = el("tbody");
+    rows.forEach(r=>{ const tr=el("tr"); r.forEach(c=>tr.append(typeof c==="object" ? el("td",{},c) : el("td",{textContent:c}))); tb.append(tr); });
+    t.append(tb); return el("div",{className:"wrap"},t);
+  };
+  const delBtn = fn => { const b=el("button",{className:"x",textContent:"✕",title:"Delete"}); b.onclick=fn; return b; };
+  const field = (label, node) => el("div",{}, el("label",{textContent:label}), node);
+
+  function draw(){
+    modes.innerHTML = "";
+    tabs.forEach(([k,l])=>{ const b=el("button",{textContent:l,className:k===cur?"on":""}); b.onclick=()=>{cur=k;draw();}; modes.append(b); });
+    body.innerHTML = "";
+    ({product:drawProduct,type:drawType,brand:drawBrand,group:drawGroup,sku:drawSku})[cur]();
+  }
+
+  /* ----- Product: Company + Model, no spaces ----- */
+  function drawProduct(){
+    const m = M(), err = el("div",{className:"err-t"});
+    body.append(el("p",{className:"hint",style:"margin-top:0",textContent:"Product = Company + Model, written without spaces (Infinix + Hot4 = InfinixHot4, Samsung + A36 = SamsungA36). Spaces are removed automatically."}));
+    const co = el("input",{placeholder:"e.g. Infinix"}); co.setAttribute("list","dl-co");
+    const dl = el("datalist",{id:"dl-co"});
+    [...new Set(m.products.map(p=>p.company))].forEach(c=>dl.append(el("option",{value:c})));
+    const mo = el("input",{placeholder:"e.g. Hot4"});
+    [co,mo].forEach(i=>{ i.addEventListener("keydown",e=>{ if(e.key===" ") e.preventDefault(); }); i.addEventListener("input",()=>{ i.value = noSp(i.value); }); });
+    const add = el("button",{className:"btn",textContent:"Add product"});
+    add.onclick = () => {
+      const p = {company:noSp(co.value), model:noSp(mo.value)};
+      if(!p.company || !p.model){ err.textContent="Company and Model both are required"; return; }
+      if(m.products.some(x=>pKey(x)===pKey(p))){ err.textContent="This product already exists"; return; }
+      m.products.push(p); m.products.sort((a,b)=>pName(a).localeCompare(pName(b))); saveM(m); draw();
+    };
+    co.onkeydown = e => { if(e.key==="Enter"){ e.preventDefault(); mo.focus(); } else if(e.key===" ") e.preventDefault(); };
+    mo.onkeydown = e => { if(e.key==="Enter") add.click(); else if(e.key===" ") e.preventDefault(); };
+    body.append(el("div",{className:"grid"}, field("Company",co), field("Model",mo)), dl, add, err);
+    const rows = m.products.map(p=>{
+      const g = groupOf(m,p);
+      return [pName(p), p.company, p.model, g?g.name:"—", delBtn(()=>{
+        if(g) return note("'"+pName(p)+"' is in group '"+g.name+"'. Remove it from the group first.");
+        if(usedProducts().includes(pKey(p))) return note("'"+pName(p)+"' is already used in purchase/sale, so it cannot be deleted.");
+        if(m.skus.some(s=>s.pk===pKey(p))) return note("Some SKUs point to '"+pName(p)+"'. Delete those SKUs first.");
+        m.products = m.products.filter(x=>pKey(x)!==pKey(p)); saveM(m); draw();
+      })];
+    });
+    body.append(tbl(["Product","Company","Model","Group",""], rows));
+  }
+
+  /* ----- Type ----- */
+  function drawType(){
+    const m = M(), err = el("div",{className:"err-t"});
+    body.append(el("p",{className:"hint",style:"margin-top:0",textContent:"Cover type. Example: Eagle, TPU, Silicon, Flip."}));
+    const inp = el("input",{placeholder:"e.g. TPU"});
+    const add = el("button",{className:"btn",textContent:"Add type"});
+    add.onclick = () => {
+      const v = clean(inp.value); if(!v) return;
+      if(m.types.some(t=>low(t)===low(v))){ err.textContent="Already exists"; return; }
+      m.types.push(v); m.types.sort((a,b)=>a.localeCompare(b)); saveM(m); draw();
+    };
+    inp.onkeydown = e => { if(e.key==="Enter") add.click(); };
+    body.append(el("div",{className:"grid"}, field("Type",inp)), add, err);
+    body.append(tbl(["Type","Brands under it",""], m.types.map(t=>[t, String(m.brands.filter(b=>b.type===t).length), delBtn(()=>{
+      if(m.brands.some(b=>b.type===t)) return note("Delete the brands under '"+t+"' first.");
+      if(m.skus.some(s=>s.type===t)) return note("Some SKUs use type '"+t+"'. Delete those SKUs first.");
+      if(typeBrandUsed(t)) return note("'"+t+"' is already used in purchase/sale, so it cannot be deleted.");
+      m.types = m.types.filter(x=>x!==t); saveM(m); draw();
+    })])));
+  }
+
+  /* ----- Brand (belongs to a Type) ----- */
+  function drawBrand(){
+    const m = M(), err = el("div",{className:"err-t"});
+    body.append(el("p",{className:"hint",style:"margin-top:0",textContent:"Brand of the cover, under a Type. Example: TPU -> Zigzag, Premium, 2.00mm."}));
+    if(!m.types.length){ body.append(el("div",{className:"msg bad",style:"display:block",textContent:"Add a Type first (Type tab)."})); return; }
+    const ts = el("select"); m.types.forEach(t=>ts.append(el("option",{value:t,textContent:t})));
+    const inp = el("input",{placeholder:"e.g. Zigzag"});
+    const add = el("button",{className:"btn",textContent:"Add brand"});
+    add.onclick = () => {
+      const v = clean(inp.value); if(!v) return;
+      if(m.brands.some(b=>b.type===ts.value && low(b.name)===low(v))){ err.textContent="This brand already exists under "+ts.value; return; }
+      m.brands.push({type:ts.value,name:v}); m.brands.sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name)); saveM(m); draw();
+    };
+    inp.onkeydown = e => { if(e.key==="Enter") add.click(); };
+    body.append(el("div",{className:"grid"}, field("Type",ts), field("Brand",inp)), add, err);
+    body.append(tbl(["Type","Brand",""], m.brands.map(b=>[b.type,b.name,delBtn(()=>{
+      if(typeBrandUsed(b.type,b.name)) return note("'"+b.name+"' is already used in purchase/sale, so it cannot be deleted.");
+      m.brands = m.brands.filter(x=>x!==b); saveM(m); draw();
+    })])));
+  }
+
+  /* ----- Group: equal-model products ----- */
+  const autoName = m => {
+    const by = new Map();
+    m.products.filter(p=>gSel.has(pKey(p))).forEach(p=>{ if(!by.has(p.company)) by.set(p.company,[]); by.get(p.company).push(p.model); });
+    return [...by].map(([c,ms])=>c+"-"+ms.join("_")).join("__");
+  };
+  function drawGroup(){
+    const m = M(), err = el("div",{className:"err-t"});
+    body.append(el("p",{className:"hint",style:"margin-top:0",textContent:"Group = models that use the same cover. Stock is counted per group, so Edge60 (50) + Edge60Fusion (40) = 90 pcs. A product can be in only one group."}));
+    const free = m.products.filter(p=>!groupOf(m,p));
+
+    const box = el("div",{className:"box"}, el("b",{textContent:"Create new group"}));
+    const nm = el("input",{placeholder:"Group name (auto-suggested, editable)"});
+    nm.oninput = () => { gNameEdited = true; };
+    const flt = el("input",{placeholder:"Search products... (ge60 finds Edge60)"});
+    const list = el("div",{className:"list"});
+    if(!free.length) list.textContent = m.products.length ? "All products are already in groups." : "Add products first (Product tab).";
+    free.forEach(p=>{
+      const cb = el("input",{type:"checkbox",checked:gSel.has(pKey(p))});
+      cb.onchange = () => { cb.checked ? gSel.add(pKey(p)) : gSel.delete(pKey(p)); if(!gNameEdited) nm.value = autoName(m); };
+      const lb = el("label",{className:"chk"}, cb, el("span",{textContent:pName(p)}));
+      lb.dataset.t = norm(pName(p)); list.append(lb);
+    });
+    flt.oninput = () => list.querySelectorAll("label").forEach(l=>l.style.display = score(l.dataset.t, norm(flt.value))!==null ? "" : "none");
+    nm.value = gNameEdited ? nm.value : autoName(m);
+    const mk = el("button",{className:"btn",textContent:"Create group"});
+    mk.onclick = async () => {
+      const name = clean(nm.value);
+      if(!gSel.size){ err.textContent="Select at least one product"; return; }
+      if(!name){ err.textContent="Group name is required"; return; }
+      if(m.groups.some(g=>low(g.name)===low(name))){ err.textContent="A group with this name already exists"; return; }
+      const used = [...gSel].filter(k=>usedProducts().includes(k));
+      if(used.length && !(await ask("Some selected products already have purchase/sale entries on their own. Old entries stay separate; new ones will count under the group. Continue?"))) return;
+      const n = ls("erp_gcount",0)+1; lsSet("erp_gcount",n);
+      m.groups.push({id:"g"+n, name, products:[...gSel]}); gSel = new Set(); gNameEdited = false; saveM(m); draw();
+    };
+    box.append(el("div",{className:"grid",style:"margin-top:8px"}, field("Group name",nm), field("Find product",flt)), list, mk, err);
+    body.append(box);
+
+    m.groups.forEach(g=>{
+      const card = el("div",{className:"box"});
+      const gn = el("input",{value:g.name,style:"font-weight:600;max-width:420px"});
+      gn.onchange = () => {
+        const v = clean(gn.value);
+        if(!v || m.groups.some(x=>x!==g && low(x.name)===low(v))){ note("Name is empty or already used."); gn.value=g.name; return; }
+        g.name = v; saveM(m); draw();
+      };
+      const del = el("button",{className:"btn ghost",textContent:"Delete group",style:"margin-left:8px"});
+      del.onclick = async () => {
+        if(groupUsed(g.id)) return note("This group already has purchase entries, so it cannot be deleted.");
+        if(!(await ask("Delete group '"+g.name+"'? Its products become ungrouped."))) return;
+        m.groups = m.groups.filter(x=>x!==g); saveM(m); draw();
+      };
+      const chips = el("div",{style:"margin:8px 0"});
+      g.products.forEach(k=>{
+        const p = m.products.find(x=>pKey(x)===k); if(!p) return;
+        const c = el("span",{className:"chip"}, el("span",{textContent:pName(p)}));
+        const x = el("button",{className:"x",textContent:"✕",title:"Remove from group"});
+        x.onclick = async () => {
+          if(g.products.length===1) return note("A group needs at least one product. Delete the group instead.");
+          if((groupUsed(g.id)||usedProducts().includes(k)) && !(await ask("This group already has entries. Removing the product changes where its future entries are counted. Continue?"))) return;
+          g.products = g.products.filter(y=>y!==k); saveM(m); draw();
+        };
+        c.append(x); chips.append(c);
+      });
+      const sel = el("select",{style:"max-width:260px"}, el("option",{value:"",textContent:"+ add product to this group"}));
+      free.forEach(p=>sel.append(el("option",{value:pKey(p),textContent:pName(p)})));
+      sel.onchange = async () => {
+        if(!sel.value) return;
+        if((groupUsed(g.id)||usedProducts().includes(sel.value)) && !(await ask("This product or group already has entries. Its future entries will be counted under this group. Continue?"))){ sel.value=""; return; }
+        g.products.push(sel.value); saveM(m); draw();
+      };
+      const hint = el("div",{className:"hint",style:"margin-bottom:8px",textContent: m.types.length ? "Stock groups: "+m.types.map(t=>codeOf(t,g.name)).join(", ") : "Add Types to see the stock groups (Type_Group)."});
+      card.append(gn, del, chips, hint, sel); body.append(card);
+    });
+  }
+
+  /* ----- SKU master: any SKU text -> Product Code ----- */
+  let skuMode = "single", skuBulk = [];
+  function drawSku(){
+    const m = M(), codes = allCodes(m), err = el("div",{className:"err-t"});
+    body.append(el("p",{className:"hint",style:"margin-top:0",textContent:"SKU master links a SKU text (for example Eagle@kk Realme C53) to a Product Code (Eagle_RealmeC53). Many SKUs can point to one Product Code, but one SKU points to only one."}));
+    if(!codes.length){ body.append(el("div",{className:"msg bad",style:"display:block",textContent:"Add Types and Products first. Product Codes are made from them."})); return; }
+    const mm = el("div",{className:"modes"});
+    [["single","Single"],["bulk","Bulk"]].forEach(([k,l])=>{ const b=el("button",{textContent:l,className:k===skuMode?"on":""}); b.onclick=()=>{skuMode=k;draw();}; mm.append(b); });
+    body.append(mm);
+    const cleanSku = v => clean(v).replace(/\s+/g," ");
+    const existing = new Set(m.skus.map(s=>low(s.sku)));
+    const codeNow = s => { const c = codes.find(x=>x.type===s.type && x.pk===s.pk); return c ? c.code : ""; };
+
+    if(skuMode==="single"){
+      const skuIn = el("input",{className:"sku-in",placeholder:"e.g. Eagle@kk Realme C53"});
+      const codeIn = el("input",{placeholder:"type e.g. eaglec53",autocomplete:"off"});
+      const f1 = field("SKU", skuIn), f2 = field("Product Code", codeIn);
+      const add = el("button",{className:"btn",textContent:"Add SKU"});
+      const cc = combo(codeIn, ()=>codes.map(c=>({value:c.code,label:c.code,c})), {next:()=>add.focus()});
+      skuIn.onkeydown = e => { if(e.key==="Enter"){ e.preventDefault(); codeIn.focus(); } };
+      add.onclick = () => {
+        const sku = cleanSku(skuIn.value), pk = cc.get();
+        if(!sku){ err.textContent="SKU is required"; skuIn.focus(); return; }
+        if(!pk){ err.textContent="Pick a Product Code from the suggestions"; codeIn.focus(); return; }
+        if(existing.has(low(sku))){ err.textContent="This SKU already exists"; return; }
+        m.skus.push({sku, type:pk.c.type, pk:pk.c.pk}); saveM(m); draw();
+        const n = $(".sku-in", body); if(n) n.focus();
+      };
+      body.append(el("div",{className:"grid"}, f1, f2), add, err);
+    } else {
+      const tpl = el("button",{className:"btn ghost",textContent:"Download Excel template"});
+      tpl.onclick = () => {
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["SKU","Product Code"],["Eagle@kk Realme C53", codes[0].code]]), "SKU");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Product Code","Type"], ...codes.map(c=>[c.code,c.type])]), "Ref-Codes");
+        XLSX.writeFile(wb, "sku_template.xlsx");
+      };
+      const fi = el("input",{type:"file",accept:".xlsx,.xls,.csv"});
+      const prev = el("div"), save = el("button",{className:"btn ok",textContent:"Final save SKUs",disabled:true});
+      const renderPrev = () => {
+        prev.innerHTML = "";
+        const bad = skuBulk.filter(r=>r.error).length;
+        if(skuBulk.length){
+          prev.append(tbl(["#","SKU","Product Code","Status"], skuBulk.map((r,i)=>[String(i+1), r.sku, r.code, r.error||"OK"])));
+          prev.querySelectorAll("tbody tr").forEach((tr,i)=>{ if(skuBulk[i].error) tr.className="err"; });
+        }
+        save.disabled = !skuBulk.length || bad>0;
+        err.textContent = bad ? bad+" row(s) have errors. Fix the file and upload again." : "";
+      };
+      fi.onchange = async () => {
+        const f = fi.files[0]; if(!f) return;
+        try{
+          const wb = XLSX.read(await f.arrayBuffer(), {type:"array"});
+          const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval:""});
+          const seen = new Set();
+          skuBulk = data.map(o=>{
+            const k = {}; Object.keys(o).forEach(h=>k[h.toString().trim().toLowerCase()] = o[h]);
+            const sku = cleanSku(k.sku), cs = clean(k["product code"]);
+            const c = codes.find(x=>low(x.code)===low(cs));
+            let error = "";
+            if(!sku) error = "SKU missing";
+            else if(!c) error = "Product Code not valid (see Ref-Codes sheet)";
+            else if(existing.has(low(sku))) error = "SKU already exists";
+            else if(seen.has(low(sku))) error = "Duplicate SKU in file";
+            if(sku) seen.add(low(sku));
+            return {sku, code:c?c.code:cs, type:c?c.type:"", pk:c?c.pk:"", error};
+          }).filter(r=>r.sku || r.code);
+          if(!skuBulk.length) err.textContent = "No data rows found in the file.";
+          else renderPrev();
+        }catch(e){ err.textContent = "Could not read the file: "+e.message; }
+      };
+      save.onclick = () => {
+        skuBulk.forEach(r=>m.skus.push({sku:r.sku, type:r.type, pk:r.pk}));
+        skuBulk = []; saveM(m); draw();
+      };
+      body.append(el("div",{className:"row"}, tpl, field("Upload filled template", fi)), prev, save, err);
+      renderPrev();
+    }
+
+    body.append(el("h4",{style:"margin:16px 0 6px",textContent:"SKU list ("+m.skus.length+")"}));
+    const flt = el("input",{placeholder:"Search SKU or Product Code..."}), listBox = el("div");
+    const renderList = () => {
+      listBox.innerHTML = "";
+      const f = norm(flt.value);
+      const rows = m.skus.map((s,i)=>({s,i,code:codeNow(s)})).filter(r=>score(norm(r.s.sku+r.code), f)!==null);
+      listBox.append(tbl(["SKU","Product Code",""], rows.map(r=>[
+        r.s.sku,
+        r.code ? r.code : el("span",{textContent:"invalid - re-map this SKU",style:"color:var(--bad)"}),
+        delBtn(()=>{ m.skus.splice(r.i,1); saveM(m); draw(); })
+      ])));
+    };
+    flt.oninput = renderList; renderList();
+    body.append(flt, listBox);
+  }
+
+  draw();
+}
+
+/* =====================================================
+   PURCHASE / SALE PAGE
+   ===================================================== */
+function buildPage(kind, root){
+  const isP = kind==="purchase";
+  const partyLabel = isP ? "Vendor" : "Customer";
+  const cls = isP ? "" : "sale";
+  let rows = [], mode = "single", bulkRows = [];
+  const act = isP ? "savePurchase" : "saveSale";
+
+  root.innerHTML = `
+    <div class="modes"><button data-m="single" class="on">Single</button><button data-m="bulk">Bulk</button></div>
+    <div class="grid">
+      <div><label>Invoice No.</label><input class="inv"></div>
+      <div><label>Date & Time</label><input class="dt" type="datetime-local"></div>
+      <div><label>${partyLabel}</label><input class="party" placeholder="${partyLabel} name"></div>
+    </div>
+    <div class="hint" style="margin:-4px 0 12px">Invoice no. is auto-generated (yyyymmddhhmm). You can edit it.</div>
+
+    <section class="single">
+      <div class="grid">
+        <div><label>Product</label><input class="f-product" placeholder="type e.g. ge60" autocomplete="off"></div>
+        <div><label>Type</label><input class="f-type" placeholder="type e.g. tpu" autocomplete="off"></div>
+        <div><label>Brand</label><input class="f-brand" placeholder="pick type first" autocomplete="off" disabled></div>
+        <div><label>Qty</label><input class="f-qty" type="number" min="1" step="1" placeholder="Enter to add"></div>
+        <div><label>Group (auto)</label><input class="f-group" readonly placeholder="auto from product"></div>
+        <div><label>Product Code (auto)</label><input class="f-code" readonly placeholder="Type_Product"></div>
+      </div>
+      <div class="hint" style="margin:-4px 0 10px">Fast entry: type a few letters, press Enter to pick and jump to the next field. In Qty, press Enter to add the row. Letters can be from the middle ("ge60" shows Edge60 and Edge60Fusion).</div>
+      <button class="btn ${cls} add">Add to row</button>
+    </section>
+
+    <section class="bulk hide">
+      <div class="row">
+        <button class="btn ghost tpl">Download Excel template</button>
+        <div><label>Upload filled template</label><input class="file" type="file" accept=".xlsx,.xls,.csv"></div>
+      </div>
+      <div class="hint">Columns: Product, Type, Brand, Qty. Values must match the Masters (see the reference sheets inside the template). Rows with errors are highlighted and must be fixed before saving.</div>
+    </section>
+
+    <h4 style="margin:16px 0 0" class="ttl"></h4>
+    <div class="wrap"><table><thead><tr>
+      <th>#</th><th>Product</th><th>Type</th><th>Brand</th><th>Group</th><th>Product Code</th><th>Qty</th><th></th>
+    </tr></thead><tbody></tbody></table></div>
+    <div class="tot"></div>
+    <div class="msg"></div>
+    <div class="row"><button class="btn ok save" disabled></button><button class="btn ghost clear">Clear</button></div>`;
+
+  const q = s => $(s, root);
+  const inv=q(".inv"), dt=q(".dt"), party=q(".party");
+  const msg = (t,ok) => { const m=q(".msg"); m.className="msg "+(ok?"ok":"bad"); m.textContent=t; };
+  const clearMsg = () => q(".msg").className="msg";
+  const newHeader = () => { inv.value = stamp(new Date()); dt.value = nowLocal(); };
+  newHeader();
+
+  /* type-ahead fields built from Masters */
+  const showInfo = () => {
+    const p = cProd.get(), t = cType.get(), gn = p ? groupInfo(M(),p.p).name : "";
+    q(".f-group").value = (gn && t) ? codeOf(t.value, gn) : gn;     // Type_Group once the type is picked
+    q(".f-code").value = (p && t) ? codeOf(t.value, pName(p.p)) : "";
+  };
+  const cProd = combo(q(".f-product"), () => M().products.map(p=>({value:pKey(p),label:pName(p),p})), {
+    onPick: () => showInfo(),
+    next: () => q(".f-type").focus()
+  });
+  const cType = combo(q(".f-type"), () => M().types.map(t=>({value:t,label:t})), {
+    onPick: it => { cBrand.clear(); cBrand.setDisabled(!it); q(".f-brand").placeholder = it ? "type e.g. zig" : "pick type first"; showInfo(); },
+    next: () => { if(!q(".f-brand").disabled) q(".f-brand").focus(); }
+  });
+  const cBrand = combo(q(".f-brand"), () => { const t=cType.get(); return t ? M().brands.filter(b=>b.type===t.value).map(b=>({value:b.name,label:b.name})) : []; }, {
+    next: () => q(".f-qty").focus()
+  });
+  q(".f-qty").addEventListener("keydown", e => { if(e.key==="Enter"){ e.preventDefault(); q(".add").click(); } });
+  const resetEntry = () => { cProd.clear(); cType.clear(); cBrand.clear(); cBrand.setDisabled(true); q(".f-brand").placeholder="pick type first"; q(".f-qty").value=""; q(".f-group").value=""; q(".f-code").value=""; };
+  window.addEventListener("mastersChanged", resetEntry);
+
+  /* validate one entry against Masters -> {row} or {error} */
+  function resolve(p, type, brand, qty, pend){
+    const m = M();
+    if(!p) return {error:"Product not in Masters"};
+    const t = m.types.find(x=>low(x)===low(type)); if(!t) return {error:"Type '"+type+"' not in Masters"};
+    const b = m.brands.find(x=>x.type===t && low(x.name)===low(brand)); if(!b) return {error:"Brand '"+brand+"' not found under type "+t};
+    const n = Number(qty); if(!(n>0) || !Number.isInteger(n)) return {error:"Qty must be a whole number > 0"};
+    const gi = groupInfo(m,p);
+    if(!isP){                                      // sale can not be more than the stock in hand
+      const have = availableQty(gi.id,t,b.name) - ((pend||{})[stockKey(gi.id,t,b.name)]||0);
+      if(have<=0) return {error:"Not in stock (purchase it first)"};
+      if(n>have) return {error:"Only "+have+" in stock"};
+    }
+    return {row:{pk:pKey(p), company:p.company, model:p.model, product:pName(p), type:t, brand:b.name, group:codeOf(t,gi.name), gid:gi.id, code:codeOf(t,pName(p)), qty:n}};
+  }
+
+  const activeRows = () => mode==="single" ? rows : bulkRows;
+  function render(){
+    const list = activeRows(), tb = q("tbody"); tb.innerHTML="";
+    let tot = 0, errs = 0;
+    list.forEach((r,i)=>{
+      if(r.error) errs++; else tot += Number(r.qty)||0;
+      const tr = el("tr"); if(r.error) tr.className="err";
+      [i+1, r.product, r.type, r.brand, r.error ? r.error : (r.group||""), r.error ? "" : r.code, r.qty].forEach(v=>tr.append(el("td",{textContent:v})));
+      const x = el("button",{className:"x",textContent:"✕",title:"Remove"});
+      x.onclick=()=>{ list.splice(i,1); render(); };
+      tr.append(el("td",{},x)); tb.append(tr);
+    });
+    q(".ttl").textContent = mode==="single" ? "Entries in this invoice" : "Preview of uploaded entries";
+    q(".tot").textContent = list.length ? `Rows: ${list.length}   |   Total Qty: ${tot}` : "";
+    const b = q(".save");
+    b.textContent = mode==="single" ? "Final save all entries in this invoice" : "Final save entries";
+    b.disabled = !list.length || errs>0;
+    if(errs) msg(`${errs} row(s) have errors. Fix the file and upload again.`, false);
+  }
+
+  root.querySelectorAll(".modes button").forEach(b=>b.onclick=()=>{
+    mode=b.dataset.m;
+    root.querySelectorAll(".modes button").forEach(x=>x.classList.toggle("on",x===b));
+    q(".single").classList.toggle("hide",mode!=="single");
+    q(".bulk").classList.toggle("hide",mode!=="bulk");
+    clearMsg(); render();
+  });
+
+  /* single: add row */
+  q(".add").onclick=()=>{
+    clearMsg();
+    const p = cProd.get(), t = cType.get(), b = cBrand.get();
+    if(!p){ msg("Pick a product from the suggestions",false); q(".f-product").focus(); return; }
+    if(!t){ msg("Pick a type from the suggestions",false); q(".f-type").focus(); return; }
+    if(!b){ msg("Pick a brand from the suggestions",false); q(".f-brand").focus(); return; }
+    const pend = {}; rows.forEach(x=>{ const sk=stockKey(x.gid,x.type,x.brand); pend[sk]=(pend[sk]||0)+x.qty; });
+    const r = resolve(p.p, t.value, b.value, q(".f-qty").value, pend);
+    if(r.error){ msg(r.error,false); if(/Qty/.test(r.error)) q(".f-qty").focus(); return; }
+    rows.push(r.row);
+    resetEntry(); q(".f-product").focus(); render();
+  };
+
+  /* bulk: template */
+  q(".tpl").onclick=()=>{
+    const m = M(), p0 = m.products[0], b0 = m.brands[0];
+    const ws = XLSX.utils.aoa_to_sheet([["Product","Type","Brand","Qty"],[p0?pName(p0):"", b0?b0.type:"", b0?b0.name:"", 10]]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Entries");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Product","Company","Model","Group"], ...m.products.map(p=>[pName(p),p.company,p.model,groupInfo(m,p).name])]), "Ref-Products");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Type","Brand"], ...m.brands.map(b=>[b.type,b.name])]), "Ref-Type-Brand");
+    XLSX.writeFile(wb, `${kind}_template.xlsx`);
+  };
+
+  /* bulk: upload */
+  q(".file").onchange = async ev => {
+    clearMsg(); const f = ev.target.files[0]; if(!f) return;
+    try{
+      const m = M();
+      const wb = XLSX.read(await f.arrayBuffer(), {type:"array"});
+      const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval:""});
+      const pend = {};
+      bulkRows = data.map(o=>{
+        const k = {}; Object.keys(o).forEach(h=>k[h.toString().trim().toLowerCase()] = o[h]);
+        const name = noSp(k.product);
+        const p = m.products.find(x=>low(pName(x))===low(name));
+        const r = resolve(p, k.type, k.brand, k.qty, pend);
+        if(r.row){ const sk=stockKey(r.row.gid,r.row.type,r.row.brand); pend[sk]=(pend[sk]||0)+r.row.qty; }
+        return r.row || {product:name, type:clean(k.type), brand:clean(k.brand), qty:clean(k.qty), error:r.error};
+      }).filter(r=>r.product || r.qty);
+      if(!bulkRows.length) msg("No data rows found in the file.", false);
+      render();
+    }catch(e){ msg("Could not read the file: "+e.message, false); }
+  };
+
+  /* final save */
+  q(".save").onclick = async () => {
+    clearMsg();
+    const invNo = clean(inv.value), party_ = clean(party.value);
+    if(!invNo){ msg("Invoice no. is required",false); return; }
+    if(!party_){ msg(partyLabel+" is required",false); return; }
+    const src = activeRows();
+    const list = src.map(r=>({company:r.company, model:r.model, product:r.product, type:r.type, brand:r.brand, group:r.group, code:r.code, qty:r.qty}));
+    const b = q(".save"); b.disabled = true;
+    try{
+      const res = await api(act, {invoice:invNo, datetime:dt.value, party:party_, mode, rows:list});
+      if(res.ok){
+        msg(`Saved ${list.length} row(s) in invoice ${invNo}.` + (res.demo?" (demo mode, saved in this browser only)":""), true);
+        rows=[]; bulkRows=[]; q(".file").value=""; newHeader(); party.value="";
+        b.disabled = true; q(".tot").textContent=""; q("tbody").innerHTML="";
+      } else { msg(res.error||"Save failed", false); b.disabled=false; }
+    }catch(e){ msg("Network error: "+e.message, false); b.disabled=false; }
+  };
+
+  q(".clear").onclick=()=>{ rows=[]; bulkRows=[]; q(".file").value=""; clearMsg(); render(); };
+  render();
+}
+
+/* =====================================================
+   STOCK PAGE  (current stock group-wise, history of every in/out, edit old entries)
+   ===================================================== */
+function buildStock(root){
+  let view = "stock";
+  root.innerHTML = `<div class="modes"></div><div class="body"></div>`;
+  const modes = $(".modes",root), body = $(".body",root);
+  const showDt = s => String(s||"").replace("T"," ");
+  const num = (v,cls="") => el("td",{textContent:String(v),className:"n "+cls});
+  const head = (cols) => el("thead",{},el("tr",{},...cols.map(h=>el("th",{textContent:h,className:/^(Purchased|Sold|Available|Qty)$/.test(h)?"n":""}))));
+  const negativeAfter = ov => {
+    const neg = Object.values(stockMap(ledger(ov))).find(s=>s.in-s.out<0);
+    return neg ? "This change would make stock negative for "+neg.group+" / "+neg.brand+" ("+(neg.in-neg.out)+")." : "";
+  };
+
+  function draw(){
+    modes.innerHTML = "";
+    [["stock","Stock"],["history","History"]].forEach(([k,l])=>{ const b=el("button",{textContent:l,className:k===view?"on":""}); b.onclick=()=>{view=k;draw();}; modes.append(b); });
+    body.innerHTML = "";
+    (view==="stock" ? drawStock : drawHistory)();
+  }
+
+  /* ----- Stock: group-wise ----- */
+  function drawStock(){
+    const all = Object.values(stockMap(ledger()));
+    const tIn = all.reduce((a,s)=>a+s.in,0), tOut = all.reduce((a,s)=>a+s.out,0);
+    const cards = el("div",{className:"grid"});
+    [["Total purchased",tIn],["Total sold",tOut],["Available",tIn-tOut]].forEach(([l,v])=>cards.append(el("div",{className:"stat"}, el("div",{className:"hint",textContent:l}), el("div",{className:"big",textContent:String(v)}))));
+    const flt = el("input",{placeholder:"Search group, brand or product... (ge60 finds Edge60)"});
+    const hz = el("input",{type:"checkbox"});
+    const bar = el("div",{className:"row"}, el("div",{style:"flex:1;min-width:220px"},flt), el("label",{className:"chk"},hz,el("span",{textContent:"Hide zero stock"})));
+    const box = el("div");
+    body.append(cards, bar, box);
+    const render = () => {
+      box.innerHTML = "";
+      const f = norm(flt.value);
+      const rows = all.filter(s=> !(hz.checked && s.in-s.out===0) && score(norm(s.group+" "+s.brand+" "+Object.keys(s.products).join(" ")), f)!==null);
+      if(!rows.length){ box.append(el("p",{className:"hint",textContent: all.length ? "Nothing matches." : "No stock yet. Save a purchase and it will show here."})); return; }
+      const by = new Map(); rows.forEach(s=>{ if(!by.has(s.group)) by.set(s.group,[]); by.get(s.group).push(s); });
+      const t = el("table"); t.append(head(["Stock group / Brand","Purchased","Sold","Available","Products (in / out)"]));
+      const tb = el("tbody");
+      [...by.keys()].sort((a,b)=>a.localeCompare(b)).forEach(g=>{
+        const list = by.get(g).sort((a,b)=>a.brand.localeCompare(b.brand));
+        const sIn = list.reduce((a,s)=>a+s.in,0), sOut = list.reduce((a,s)=>a+s.out,0), sAv = sIn-sOut;
+        tb.append(el("tr",{className:"grp"}, el("td",{textContent:g}), num(sIn), num(sOut), num(sAv, sAv<0?"neg":""), el("td")));
+        list.forEach(s=>{
+          const av = s.in-s.out;
+          tb.append(el("tr",{}, el("td",{textContent:s.brand,style:"padding-left:24px"}), num(s.in), num(s.out), num(av, av<0?"neg":av===0?"zero":""),
+            el("td",{className:"hint",textContent:Object.entries(s.products).map(([n,v])=>n+": +"+v.in+" / -"+v.out).join("   ·   ")})));
+        });
+      });
+      t.append(tb); box.append(el("div",{className:"wrap"},t));
+    };
+    flt.oninput = render; hz.onchange = render; render();
+  }
+
+  /* ----- History: every in/out line ----- */
+  function drawHistory(){
+    const all = ledger().sort((a,b)=> b.datetime.localeCompare(a.datetime) || String(b.invoice).localeCompare(String(a.invoice)) || a.idx-b.idx);
+    const flt = el("input",{placeholder:"Search product, vendor/customer, invoice, group..."});
+    const kind = el("select",{}, el("option",{value:"All",textContent:"All (in + out)"}), el("option",{value:"Purchase",textContent:"Purchase (in)"}), el("option",{value:"Sale",textContent:"Sale (out)"}));
+    const from = el("input",{type:"date"}), to = el("input",{type:"date"});
+    const field = (l,n) => el("div",{}, el("label",{textContent:l}), n);
+    const sum = el("div",{className:"hint",style:"margin:4px 0"}), box = el("div");
+    body.append(el("div",{className:"grid"}, field("Search",flt), field("Show",kind), field("From date",from), field("To date",to)), sum, box);
+    const render = () => {
+      box.innerHTML = "";
+      const f = norm(flt.value), fd = from.value, td = to.value;
+      const rows = all.filter(e=>{
+        if(kind.value!=="All" && e.kind!==kind.value) return false;
+        const d = e.datetime.slice(0,10);
+        if((fd && d<fd) || (td && d>td)) return false;
+        return score(norm([e.product,e.party,e.invoice,e.group,e.brand,e.code].join(" ")), f)!==null;
+      });
+      const sIn = rows.filter(e=>e.kind==="Purchase").reduce((a,e)=>a+e.qty,0), sOut = rows.filter(e=>e.kind==="Sale").reduce((a,e)=>a+e.qty,0);
+      sum.textContent = rows.length+" line(s)   |   In: "+sIn+"   |   Out: "+sOut;
+      if(!rows.length){ box.append(el("p",{className:"hint",textContent: all.length ? "Nothing matches." : "No entries yet."})); return; }
+      const t = el("table"); t.append(head(["Date","Invoice","Movement","From","To","Product","Type","Brand","Stock group","Qty",""]));
+      const tb = el("tbody");
+      rows.slice(0,500).forEach(e=>{
+        const isIn = e.kind==="Purchase", eb = el("button",{className:"btn ghost",textContent:"Edit"});
+        eb.onclick = () => openEditor(e.kind, e.invoice, draw);
+        tb.append(el("tr",{},
+          el("td",{textContent:showDt(e.datetime),style:"white-space:nowrap"}), el("td",{textContent:e.invoice}),
+          el("td",{},el("span",{className:"bdg "+(isIn?"in":"out"),textContent:isIn?"IN · Purchase":"OUT · Sale"})),
+          el("td",{textContent:isIn?e.party:"Stock"}), el("td",{textContent:isIn?"Stock":e.party}),
+          el("td",{textContent:e.product}), el("td",{textContent:e.type}), el("td",{textContent:e.brand}), el("td",{textContent:e.group}),
+          num(e.qty), el("td",{},eb)));
+      });
+      t.append(tb); box.append(el("div",{className:"wrap"},t));
+      if(rows.length>500) box.append(el("p",{className:"hint",textContent:"Showing the latest 500 lines. Use the filters to narrow down."}));
+    };
+    [flt,kind,from,to].forEach(x=>{ x.oninput = render; x.onchange = render; }); render();
+  }
+
+  /* ----- edit / delete an old invoice ----- */
+  function openEditor(kind, invNo, done){
+    const store = STORES.find(s=>s[0]===kind)[1];
+    const all = ls(store,[]), idx = all.findIndex(x=>x.invoice===invNo);
+    if(idx<0) return note("Invoice not found.");
+    const orig = all[idx], m = M(), isIn = kind==="Purchase";
+    const rowsE = (orig.rows||[]).map(r=>({pk:low(r.company)+"|"+low(r.model), type:r.type, brand:r.brand, qty:r.qty}));
+    const ov = el("div",{className:"ovl"}), box = el("div",{className:"dlg wide"});
+    const close = () => ov.remove();
+    const err = el("div",{className:"err-t"});
+    const fail = t => { err.textContent = t; };
+    const invIn = el("input",{value:orig.invoice}), dtIn = el("input",{type:"datetime-local",value:orig.datetime||""}), partyIn = el("input",{value:orig.party||""});
+    const f = (l,n) => el("div",{}, el("label",{textContent:l}), n);
+    const rowsBox = el("div",{className:"wrap"});
+
+    const drawRows = () => {
+      rowsBox.innerHTML = "";
+      const t = el("table"); t.append(head(["Product","Type","Brand","Qty",""]));
+      const tb = el("tbody");
+      rowsE.forEach((r,i)=>{
+        const sp = el("select"); m.products.forEach(p=>sp.append(el("option",{value:pKey(p),textContent:pName(p)}))); sp.value = r.pk;
+        const st = el("select"); m.types.forEach(x=>st.append(el("option",{value:x,textContent:x}))); st.value = r.type;
+        const sb = el("select");
+        const fillB = () => { sb.innerHTML=""; m.brands.filter(b=>b.type===st.value).forEach(b=>sb.append(el("option",{value:b.name,textContent:b.name}))); };
+        fillB(); sb.value = r.brand;
+        const qi = el("input",{type:"number",min:"1",step:"1",value:r.qty,style:"max-width:100px"});
+        sp.onchange = () => { r.pk = sp.value; };
+        st.onchange = () => { r.type = st.value; fillB(); r.brand = sb.value; };
+        sb.onchange = () => { r.brand = sb.value; };
+        qi.oninput = () => { r.qty = qi.value; };
+        const x = el("button",{className:"x",textContent:"✕",title:"Remove row"});
+        x.onclick = () => { rowsE.splice(i,1); drawRows(); };
+        tb.append(el("tr",{}, el("td",{},sp), el("td",{},st), el("td",{},sb), el("td",{},qi), el("td",{},x)));
+      });
+      t.append(tb); rowsBox.append(t);
+    };
+    const addRow = el("button",{className:"btn ghost",textContent:"+ Add row"});
+    addRow.onclick = () => { const p0 = m.products[0], t0 = m.types[0]; rowsE.push({pk:p0?pKey(p0):"", type:t0||"", brand:(m.brands.find(b=>b.type===t0)||{}).name||"", qty:1}); drawRows(); };
+
+    const save = el("button",{className:"btn ok",textContent:"Save changes"});
+    const del = el("button",{className:"btn ghost",textContent:"Delete invoice",style:"color:var(--bad)"});
+    const cancel = el("button",{className:"btn ghost",textContent:"Cancel"}); cancel.onclick = close;
+
+    save.onclick = () => {
+      fail("");
+      const inv2 = clean(invIn.value), party2 = clean(partyIn.value);
+      if(!inv2) return fail("Invoice no. is required");
+      if(!party2) return fail((isIn?"Vendor":"Customer")+" is required");
+      if(!rowsE.length) return fail("Add at least one row, or delete the invoice.");
+      if(inv2!==orig.invoice && all.some(x=>x.invoice===inv2)) return fail("Invoice no. already exists");
+      const rows2 = [];
+      for(const r of rowsE){
+        const p = m.products.find(x=>pKey(x)===r.pk), b = m.brands.find(x=>x.type===r.type && x.name===r.brand), n = Number(r.qty);
+        if(!p || !m.types.includes(r.type) || !b) return fail("Pick product, type and brand for every row");
+        if(!(n>0) || !Number.isInteger(n)) return fail("Qty must be a whole number > 0");
+        const gi = groupInfo(m,p);
+        rows2.push({company:p.company, model:p.model, product:pName(p), type:r.type, brand:b.name, group:codeOf(r.type,gi.name), code:codeOf(r.type,pName(p)), qty:n});
+      }
+      const next = all.slice(); next[idx] = {...orig, invoice:inv2, datetime:dtIn.value, party:party2, rows:rows2};
+      const bad = negativeAfter({[store]:next}); if(bad) return fail(bad);
+      lsSet(store,next); close(); done();
+    };
+    del.onclick = async () => {
+      fail("");
+      if(!(await ask("Delete invoice "+orig.invoice+" with all its rows? Stock will change."))) return;
+      const next = all.filter((_,i)=>i!==idx), bad = negativeAfter({[store]:next});
+      if(bad) return fail(bad);
+      lsSet(store,next); close(); done();
+    };
+
+    drawRows();
+    box.append(el("h3",{textContent:"Edit "+kind.toLowerCase()+" invoice "+orig.invoice}),
+      el("div",{className:"grid"}, f("Invoice No.",invIn), f("Date & Time",dtIn), f(isIn?"Vendor":"Customer",partyIn)),
+      rowsBox, addRow, err,
+      el("div",{className:"row",style:"justify-content:space-between;margin:12px 0 0"}, del, el("div",{className:"row",style:"margin:0"}, cancel, save)));
+    ov.append(box); document.body.append(ov);
+  }
+
+  draw();
+  return {draw};
+}
+
+buildMasters($("#pageM"));
+buildPage("purchase", $("#pageP"));
+buildPage("sale", $("#pageS"));
+const stockPage = buildStock($("#pageT"));
+
+/* tabs */
+function tab(which){
+  ["M","P","S","T"].forEach(k=>{
+    $("#page"+k).classList.toggle("hide", which!==k);
+    $("#tab"+k).classList.toggle("on", which===k);
+  });
+  if(which==="T") stockPage.draw();            // always show fresh numbers
+}
+$("#tabM").onclick=()=>tab("M"); $("#tabP").onclick=()=>tab("P"); $("#tabS").onclick=()=>tab("S"); $("#tabT").onclick=()=>tab("T");
+$("#who").textContent = CONFIG.API_URL ? "" : "DEMO mode (no server connected)";
+</script>
+</body>
+</html>
